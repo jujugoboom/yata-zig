@@ -1,0 +1,306 @@
+const item = @import("item.zig");
+const std = @import("std");
+const testing = std.testing;
+const expect = testing.expect;
+
+const MergeError = error{ MissingOperation, MissingParent };
+
+const DocDelta = struct {
+    delta: std.ArrayList(item.Item),
+    tombstones: std.AutoHashMap(item.ItemId, void),
+    pub fn deinit(self: *DocDelta) void {
+        self.delta.deinit();
+        self.tombstones.deinit();
+    }
+};
+
+pub const Doc = struct {
+    items: std.ArrayList(item.Item),
+    allocator: std.mem.Allocator,
+    content: std.ArrayList(u8),
+    pub fn init(allocator: std.mem.Allocator) Doc {
+        return Doc{ .items = std.ArrayList(item.Item).init(allocator), .allocator = allocator, .content = std.ArrayList(u8).init(allocator) };
+    }
+
+    fn fromItems(allocator: std.mem.Allocator, items: *std.ArrayList(item.Item)) !Doc {
+        var item_clone = try items.clone();
+        return Doc{ .items = item_clone, .allocator = allocator, .content = std.ArrayList(u8).init(allocator) };
+    }
+
+    pub fn deinit(self: Doc) void {
+        self.items.deinit();
+        self.content.deinit();
+    }
+
+    pub fn toString(self: Doc) !std.ArrayList(u8) {
+        var buf = std.ArrayList(u8).init(self.allocator);
+        for (self.items.items) |currItem| {
+            try buf.appendSlice(currItem.content);
+        }
+        return buf;
+    }
+
+    fn getIdx(self: Doc, id: item.ItemId) ?usize {
+        for (self.items.items) |curr_item, i| {
+            if (curr_item.id.clientId == id.clientId and curr_item.id.seqId >= id.seqId and curr_item.id.seqId + curr_item.content.len <= id.seqId) {
+                return i;
+            }
+        }
+        return null;
+    }
+
+    fn findPosition(self: *Doc, index: usize) !usize {
+        var remaining = index;
+        var i: usize = 0;
+        for (self.items.items) |*currItem, curr_idx| {
+            if (remaining <= 0) {
+                break;
+            }
+            if (!currItem.isDeleted and currItem.content.len != 0) {
+                if (currItem.content.len > remaining) {
+                    const right = currItem.splice(currItem, remaining);
+                    try self.items.insert(curr_idx + 1, right);
+                    i += 1;
+                    break;
+                }
+                remaining -= currItem.content.len;
+            }
+            i += 1;
+        }
+        return i;
+    }
+
+    fn getNextSeqId(self: Doc, clientId: usize) usize {
+        var last_item: ?item.Item = null;
+        for (self.items.items) |curr_item| {
+            if (curr_item.id.clientId == clientId) {
+                if (last_item == null) {
+                    last_item = curr_item;
+                }
+                if (curr_item.id.seqId > last_item.?.id.seqId) {
+                    last_item = curr_item;
+                }
+            }
+        }
+        return if (last_item) |found_last_item| found_last_item.id.seqId + found_last_item.content.len else 1;
+    }
+
+    fn getLastItem(self: Doc, clientId: usize) ?item.Item {
+        var last_item: ?item.Item = null;
+        for (self.items.items) |curr_item| {
+            if (last_item == null and curr_item.id.clientId == clientId) {
+                last_item = curr_item;
+            }
+            if (curr_item.id.clientId == clientId and curr_item.id.seqId > last_item.?.id.seqId) {
+                last_item = curr_item;
+            }
+        }
+        return last_item;
+    }
+
+    pub fn insert(self: *Doc, clientId: usize, index: usize, value: []const u8) !void {
+        const pos = try self.findPosition(index);
+        const left = if (pos == 0 or pos > self.items.items.len) null else self.items.items[pos - 1].id;
+        const right = if (pos >= self.items.items.len) null else self.items.items[pos].id;
+        const seqId = self.getNextSeqId(clientId);
+        var new_item = item.Item{
+            .id = item.ItemId{ .clientId = clientId, .seqId = seqId },
+            .originLeft = left,
+            .originRight = right,
+            .content = value,
+            .isDeleted = false,
+            .splice = &item.spliceStringItem,
+        };
+        try self.items.insert(pos, new_item);
+    }
+
+    pub fn delete(self: Doc, index: usize) void {
+        const pos = self.findPosition(index);
+        self.items.items[pos].content = "";
+    }
+
+    fn findInsertPosition(self: Doc, block: item.Item, maybe_left: ?usize, maybe_right: ?usize) usize {
+        var scanning = false;
+        const left = maybe_left orelse 0;
+        const right = maybe_right orelse self.items.items.len;
+        var i = if (maybe_left) |_| left + 1 else 0;
+        var dst = if (maybe_left) |_| left + 1 else 0;
+        const client_id = block.id.clientId;
+        while (true) {
+            dst = if (scanning) dst else i;
+            if (i == right or i == self.items.items.len) break;
+            const o = self.items.items[i];
+            const o_left = self.getIdx(o.originLeft orelse item.InvalidItemId) orelse 0;
+            const o_right = self.getIdx(o.originRight orelse item.InvalidItemId) orelse self.items.items.len;
+            const o_client_id = o.id.clientId;
+            if (o_left < left or (o_left == left and o_right == right and client_id <= o_client_id)) {
+                break;
+            }
+            scanning = if (o_left == left) client_id <= o_client_id else scanning;
+            i += 1;
+        }
+        return dst;
+    }
+
+    fn integrate(self: *Doc, new_item: item.Item) !void {
+        const client_id = new_item.id.clientId;
+        const seq_id = new_item.id.seqId;
+        var last = self.getLastItem(client_id);
+        const next = if (last) |found_last| found_last.id.seqId + found_last.content.len else 1;
+        if (next != seq_id) {
+            if (last != null and seq_id < last.?.id.seqId + last.?.content.len) {
+                // Found split in content, splice now
+                _ = try self.findPosition(last.?.id.seqId);
+            } else {
+                std.debug.print("Error integrating {any}, state: {any}\n", .{ new_item, self.items.items });
+                return error.MissingOperation;
+            }
+        }
+        var left: ?usize = null;
+        var right: ?usize = null;
+        for (self.items.items) |curr_item, i| {
+            if (std.meta.eql(curr_item.id, new_item.originLeft orelse item.InvalidItemId)) {
+                left = i;
+            }
+            if (std.meta.eql(curr_item.id, new_item.originRight orelse item.InvalidItemId)) {
+                right = i;
+            }
+        }
+        const i = self.findInsertPosition(new_item, left, right);
+        try self.items.insert(i, new_item);
+    }
+
+    pub fn merge(self: *Doc, other: Doc) !void {
+        var seen = std.AutoHashMap(item.ItemId, void).init(self.allocator);
+        defer seen.deinit();
+        for (self.items.items) |*curr_item| {
+            if (curr_item.content.len == 0) {
+                curr_item.isDeleted = true;
+            }
+            if (!curr_item.isDeleted) {
+                try seen.put(curr_item.id, {});
+            }
+        }
+        var blocks = std.ArrayList(item.Item).init(self.allocator);
+        defer blocks.deinit();
+        for (other.items.items) |curr_item| {
+            if (!seen.contains(curr_item.id)) {
+                try blocks.append(curr_item);
+            }
+        }
+        var remaining = blocks.items.len;
+        while (remaining > 0) {
+            for (blocks.items) |block| {
+                const canInsert = !seen.contains(block.id) and (block.originLeft == null or seen.contains(block.originLeft.?)) and (block.originRight == null or seen.contains(block.originRight.?));
+                if (canInsert) {
+                    try self.integrate(block);
+                    try seen.put(block.id, {});
+                    remaining -= 1;
+                }
+            }
+        }
+    }
+
+    fn version(self: Doc) !std.AutoHashMap(usize, usize) {
+        var version_map = std.AutoHashMap(usize, usize).init(self.allocator);
+        for (self.items.items) |curr_item| {
+            const max_seq = (try version_map.getOrPutValue(curr_item.id.clientId, curr_item.id.seqId)).value_ptr;
+            if (curr_item.id.seqId > max_seq.*) {
+                try version_map.put(curr_item.id.clientId, curr_item.id.seqId);
+            }
+        }
+        return version_map;
+    }
+
+    pub fn delta(self: Doc, doc: Doc) !DocDelta {
+        var deltas = std.ArrayList(item.Item).init(self.allocator);
+        var tombstones = std.AutoHashMap(item.ItemId, void).init(self.allocator);
+        var curr_version = try self.version();
+        defer curr_version.deinit();
+        for (doc.items.items) |curr_item| {
+            if (!curr_version.contains(curr_item.id.clientId) or curr_item.id.seqId > curr_version.get(curr_item.id.clientId) orelse 0) {
+                try deltas.append(curr_item);
+            }
+            if (curr_item.isDeleted) {
+                try tombstones.put(curr_item.id, {});
+            }
+        }
+        return DocDelta{ .delta = deltas, .tombstones = tombstones };
+    }
+
+    pub fn mergeDelta(self: *Doc, doc_delta: *DocDelta) !void {
+        const delta_doc = try Doc.fromItems(self.allocator, &doc_delta.delta);
+        defer delta_doc.deinit();
+        try self.merge(delta_doc);
+        for (self.items.items) |*curr_item| {
+            if (!curr_item.isDeleted and doc_delta.tombstones.contains(curr_item.id)) {
+                curr_item.content = "";
+            }
+        }
+    }
+};
+
+test "Create doc test" {
+    var doc = Doc.init(testing.allocator);
+    defer doc.deinit();
+    try doc.insert(1, 0, "Hello");
+    const result1 = try doc.toString();
+    defer result1.deinit();
+    try expect(std.mem.eql(u8, result1.items, "Hello"));
+    try doc.insert(1, 3, "p");
+    const result2 = try doc.toString();
+    defer result2.deinit();
+    try expect(std.mem.eql(u8, result2.items, "Helplo"));
+}
+
+test "Merge docs test" {
+    var doc1 = Doc.init(testing.allocator);
+    defer doc1.deinit();
+    try doc1.insert(1, 0, "Hello");
+
+    var doc2 = try Doc.fromItems(testing.allocator, &doc1.items);
+    defer doc2.deinit();
+    try doc2.insert(2, 1, "p");
+    try doc1.insert(1, 2, "r");
+
+    try doc1.merge(doc2);
+    try doc2.merge(doc1);
+    const doc1_res = try doc1.toString();
+    defer doc1_res.deinit();
+    const doc2_res = try doc2.toString();
+    defer doc2_res.deinit();
+
+    std.debug.print("{s}\n", .{doc1_res.items});
+    std.debug.print("{s}\n", .{doc2_res.items});
+    try expect(std.mem.eql(u8, doc1_res.items, "Hrpello"));
+    try expect(std.mem.eql(u8, doc1_res.items, doc2_res.items));
+}
+
+test "delta merge docs test" {
+    var doc1 = Doc.init(testing.allocator);
+    defer doc1.deinit();
+    try doc1.insert(1, 0, "H");
+    try doc1.insert(1, 1, "e");
+    try doc1.insert(1, 2, "l");
+    try doc1.insert(1, 3, "l");
+    try doc1.insert(1, 4, "o");
+
+    var doc2 = try Doc.fromItems(testing.allocator, &doc1.items);
+    defer doc2.deinit();
+    try doc2.insert(2, 1, "p");
+    try doc1.insert(1, 1, "r");
+    var doc1_delta = try doc1.delta(doc2);
+    defer doc1_delta.deinit();
+    var doc2_delta = try doc2.delta(doc1);
+    defer doc2_delta.deinit();
+    try expect(doc1_delta.delta.items.len == 1);
+    try expect(doc2_delta.delta.items.len == 1);
+    try doc1.mergeDelta(&doc1_delta);
+    try doc2.mergeDelta(&doc2_delta);
+    const doc1_res = try doc1.toString();
+    defer doc1_res.deinit();
+    const doc2_res = try doc2.toString();
+    defer doc2_res.deinit();
+    try expect(std.mem.eql(u8, doc1_res.items, "Hrpello"));
+    try expect(std.mem.eql(u8, doc1_res.items, doc2_res.items));
+}
