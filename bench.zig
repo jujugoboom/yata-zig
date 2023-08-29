@@ -1,6 +1,6 @@
 const std = @import("std");
 const print = std.debug.print;
-const Doc = @import("./src/structs/doc.zig").Doc;
+const Doc = @import("./src/main.zig").Doc;
 
 fn range(len: usize) []const u0 {
     return @as([*]u0, undefined)[0..len];
