@@ -21,7 +21,7 @@ const DocIterator = struct {
     curr_item: ?*item.Item,
     pub fn next(self: *DocIterator) ?*item.Item {
         const ret = self.curr_item;
-        if (ret) |ret_it| self.curr_item = if (ret_it.right != undefined) ret_it.right else null;
+        if (ret) |ret_it| self.curr_item = ret_it.right;
         return ret;
     }
 };
@@ -165,14 +165,12 @@ pub const Doc = struct {
             return;
         }
         var pos = try self.findPosition(index);
-        // std.debug.print("INSERTING AFTER {any}\n\n", .{pos});
         new_item.originLeft = pos.?.id;
         new_item.originRight = if (pos.?.right) |right| right.id else null;
         new_item.left = pos;
         new_item.right = pos.?.right;
         if (new_item.right) |right_item| right_item.left = new_item;
         pos.?.right = new_item;
-        std.debug.print("INSERTED {any} AFTER {any}\n\n", .{ new_item, pos });
     }
 
     pub fn delete(self: Doc, index: usize) !void {
@@ -211,7 +209,7 @@ pub const Doc = struct {
             if (last != null and seq_id < last.?.id.seqId + last.?.content.len) {
                 // Found split in content, splice now
                 _ = try self.findPosition(new_item.originLeft.?.seqId);
-                self.allocator.destroy(new_item);
+                new_item.deinit();
                 return;
             } else {
                 return error.MissingOperation;
@@ -306,9 +304,13 @@ pub const Doc = struct {
                 if (delta_head == null) {
                     delta_head = try curr_item.clone();
                     curr_delta = delta_head;
+                    curr_delta.?.right = null;
+                    curr_delta.?.left = null;
                 } else {
                     curr_delta.?.right = try curr_item.clone();
+                    const old_delta = curr_delta;
                     curr_delta = curr_delta.?.right;
+                    curr_delta.?.left = old_delta;
                 }
             }
             if (curr_item.isDeleted) {
@@ -340,55 +342,53 @@ test "Create doc test" {
     try doc.insert(1, 3, "p");
     const result2 = try doc.toString();
     defer result2.deinit();
-    std.debug.print("GOT: {s}\n\n", .{result2.items});
     try expect(std.mem.eql(u8, result2.items, "Helplo"));
 }
 
-// test "Merge docs test" {
-//     var doc1 = Doc.init(testing.allocator);
-//     defer doc1.deinit();
-//     try doc1.insert(1, 0, "Hello");
+test "Merge docs test" {
+    var doc1 = Doc.init(testing.allocator);
+    defer doc1.deinit();
+    try doc1.insert(1, 0, "Hello");
 
-//     var doc2 = Doc.init(testing.allocator);
-//     defer doc2.deinit();
-//     try doc2.insert(1, 0, "Hello");
-//     try doc2.insert(2, 2, "p");
-//     try doc1.insert(1, 2, "r");
+    var doc2 = Doc.init(testing.allocator);
+    defer doc2.deinit();
+    try doc2.insert(1, 0, "Hello");
+    try doc2.insert(2, 2, "p");
+    try doc1.insert(1, 2, "r");
 
-//     try doc1.merge(doc2);
-//     try doc2.merge(doc1);
-//     const doc1_res = try doc1.toString();
-//     defer doc1_res.deinit();
-//     const doc2_res = try doc2.toString();
-//     defer doc2_res.deinit();
+    try doc1.merge(doc2);
+    try doc2.merge(doc1);
+    const doc1_res = try doc1.toString();
+    defer doc1_res.deinit();
+    const doc2_res = try doc2.toString();
+    defer doc2_res.deinit();
 
-//     try expect(std.mem.eql(u8, doc1_res.items, "Herpllo"));
-//     try expect(std.mem.eql(u8, doc1_res.items, doc2_res.items));
-// }
+    try expect(std.mem.eql(u8, doc1_res.items, "Herpllo"));
+    try expect(std.mem.eql(u8, doc1_res.items, doc2_res.items));
+}
 
-// test "delta merge docs test" {
-//     var doc1 = Doc.init(testing.allocator);
-//     defer doc1.deinit();
-//     try doc1.insert(1, 0, "Hello");
+test "delta merge docs test" {
+    var doc1 = Doc.init(testing.allocator);
+    defer doc1.deinit();
+    try doc1.insert(1, 0, "Hello");
 
-//     var doc2 = Doc.init(testing.allocator);
-//     defer doc2.deinit();
-//     try doc2.insert(1, 0, "Hello");
-//     try doc2.insert(2, 1, "p");
-//     try doc1.insert(1, 1, "r");
-//     var doc1_delta = try doc1.delta(doc2);
-//     defer doc1_delta.deinit();
-//     var doc2_delta = try doc2.delta(doc1);
-//     defer doc2_delta.deinit();
-//     std.debug.print("{any}\n\n{any}\n\n", .{ doc1_delta.delta, doc2_delta.delta });
-//     // try expect(doc1_delta.delta.?.right == null);
-//     // try expect(doc2_delta.delta.?.right == null);
-//     try doc1.mergeDelta(&doc1_delta);
-//     try doc2.mergeDelta(&doc2_delta);
-//     const doc1_res = try doc1.toString();
-//     defer doc1_res.deinit();
-//     const doc2_res = try doc2.toString();
-//     defer doc2_res.deinit();
-//     try expect(std.mem.eql(u8, doc1_res.items, "Hrpello"));
-//     try expect(std.mem.eql(u8, doc1_res.items, doc2_res.items));
-// }
+    var doc2 = Doc.init(testing.allocator);
+    defer doc2.deinit();
+    try doc2.insert(1, 0, "Hello");
+    try doc2.insert(2, 1, "p");
+    try doc1.insert(1, 1, "r");
+    var doc1_delta = try doc1.delta(doc2);
+    defer doc1_delta.deinit();
+    var doc2_delta = try doc2.delta(doc1);
+    defer doc2_delta.deinit();
+    try expect(doc2_delta.delta.?.right == null);
+    try expect(doc1_delta.delta.?.right == null);
+    try doc1.mergeDelta(&doc1_delta);
+    try doc2.mergeDelta(&doc2_delta);
+    const doc1_res = try doc1.toString();
+    defer doc1_res.deinit();
+    const doc2_res = try doc2.toString();
+    defer doc2_res.deinit();
+    try expect(std.mem.eql(u8, doc1_res.items, "Hrpello"));
+    try expect(std.mem.eql(u8, doc1_res.items, doc2_res.items));
+}

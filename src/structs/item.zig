@@ -36,6 +36,7 @@ pub const Item = struct {
         new_item.* = self.*;
         var content = try self.allocator.alloc(u8, self.content.len);
         @memcpy(content.ptr, self.content.ptr, self.content.len);
+        new_item.content = content;
         new_item.allocatedContent = true;
         return new_item;
     }
