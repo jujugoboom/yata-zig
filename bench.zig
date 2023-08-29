@@ -16,11 +16,12 @@ fn generateString(n: usize, allocator: std.mem.Allocator) ![]const u8 {
     return res;
 }
 
-pub fn bench(str: []const u8, allocator: std.mem.Allocator) !std.meta.Tuple(&.{ i64, i64 }) {
+pub fn bench(str: []const u8, allocator: std.mem.Allocator) !std.meta.Tuple(&.{ i64, i64, i64 }) {
     var doc1 = Doc.init(allocator);
     defer doc1.deinit();
     var doc2 = Doc.init(allocator);
     defer doc2.deinit();
+    var doc3 = Doc.init(allocator);
     const start = std.time.milliTimestamp();
     var i: usize = 0;
     while (i < str.len) : (i += 1) {
@@ -28,11 +29,13 @@ pub fn bench(str: []const u8, allocator: std.mem.Allocator) !std.meta.Tuple(&.{ 
         // print("{any}\n", .{doc1});
     }
     const insert_end = std.time.milliTimestamp();
-    var delta = try doc2.delta(doc1);
-    defer delta.deinit();
-    try doc2.mergeDelta(&delta);
+    try doc2.merge(doc1);
     const merge_end = std.time.milliTimestamp();
-    return .{ insert_end - start, merge_end - insert_end };
+    var delta = try doc3.delta(doc1);
+    defer delta.deinit();
+    try doc3.mergeDelta(&delta);
+    const delta_merge_end = std.time.milliTimestamp();
+    return .{ insert_end - start, merge_end - insert_end, delta_merge_end - merge_end };
 }
 
 pub fn main() !void {
@@ -42,6 +45,7 @@ pub fn main() !void {
     defer allocator.free(str);
     var avg_insert: i64 = 0;
     var avg_merge: i64 = 0;
+    var avg_delta_merge: i64 = 0;
     var i: usize = 0;
     var progress = std.Progress{};
     var node = progress.start("Bench", 100);
@@ -51,11 +55,14 @@ pub fn main() !void {
         avg_insert = @divTrunc(avg_insert, @as(i64, 2));
         avg_merge += result[1];
         avg_merge = @divTrunc(avg_merge, @as(i64, 2));
+        avg_delta_merge += result[2];
+        avg_delta_merge = @divTrunc(avg_delta_merge, @as(i64, 2));
         node.completeOne();
     }
     node.end();
     print("Inserted 6000 items in {d}ms\n", .{avg_insert});
     print("Merged 6000 items in {d}ms\n", .{avg_merge});
+    print("Merged 6000 deltas in {d}ms\n", .{avg_delta_merge});
     // print("Total: {d}ms\n", .{merge_end - start});
     // const doc_str = try doc1.toString();
     // defer doc_str.deinit();
