@@ -189,10 +189,21 @@ pub const Doc = struct {
     }
 
     /// Marks index for deletion
-    /// TODO: actually delete given index, instead of whole block of content preceeding index as well
-    pub fn delete(self: Doc, index: usize) !void {
+    pub fn delete(self: *Doc, index: usize, len: usize) !void {
         const pos = try self.findPosition(index);
-        self.items.items[pos].content = "";
+        if (pos == null) {
+            return;
+        }
+        var remaining = len;
+        var o = pos.?.right;
+        while (remaining > 0 and o != null) {
+            if (o.?.content.len > remaining) {
+                _ = try o.?.splice(o.?, remaining);
+            }
+            remaining -= o.?.content.len;
+            o.?.content = "";
+            o = o.?.right;
+        }
     }
 
     /// Main conflict resolution, finds insert position given originLeft and originRight pointers. preceedingItems should contain all ItemIds before originLeft in document
@@ -366,6 +377,19 @@ test "Create doc test" {
     const result2 = try doc.toString();
     defer result2.deinit();
     try expect(std.mem.eql(u8, result2.items, "Helplo"));
+}
+
+test "Delete text test" {
+    var doc = Doc.init(testing.allocator);
+    defer doc.deinit();
+    try doc.insert(1, 0, "Hello World");
+    const result1 = try doc.toString();
+    defer result1.deinit();
+    try expect(std.mem.eql(u8, result1.items, "Hello World"));
+    try doc.delete(1, 3);
+    const result2 = try doc.toString();
+    defer result2.deinit();
+    try expect(std.mem.eql(u8, result2.items, "Ho World"));
 }
 
 test "Merge docs test" {
