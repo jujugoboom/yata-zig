@@ -162,19 +162,7 @@ pub const Doc = struct {
     /// Inserts new item at index with clientId, splitting existing items when needed
     pub fn insert(self: *Doc, clientId: usize, index: usize, value: []const u8) !void {
         const seqId = self.getNextSeqId(clientId);
-        var new_item = try self.allocator.create(item.Item);
-        new_item.* = .{
-            .id = item.ItemId{ .clientId = clientId, .seqId = seqId },
-            .originLeft = null,
-            .originRight = null,
-            .left = null,
-            .right = null,
-            .content = value,
-            .isDeleted = false,
-            .allocator = self.allocator,
-            .splice = &item.spliceStringItem,
-            .allocatedContent = false,
-        };
+        var new_item = try item.Item.init(item.ItemId{ .clientId = clientId, .seqId = seqId }, null, null, null, null, value, false, self.allocator, &item.spliceStringItem, false);
         if (self.head == null) {
             self.head = new_item;
             return;

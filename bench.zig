@@ -26,7 +26,6 @@ pub fn bench(str: []const u8, allocator: std.mem.Allocator) !std.meta.Tuple(&.{ 
     var i: usize = 0;
     while (i < str.len) : (i += 1) {
         try doc1.insert(1, i, str[i .. i + 1]);
-        // print("{any}\n", .{doc1});
     }
     const insert_end = std.time.milliTimestamp();
     try doc2.merge(doc1);
@@ -63,11 +62,4 @@ pub fn main() !void {
     print("Inserted 6000 items in {d}ms\n", .{avg_insert});
     print("Merged 6000 items in {d}ms\n", .{avg_merge});
     print("Merged 6000 deltas in {d}ms\n", .{avg_delta_merge});
-    // print("Total: {d}ms\n", .{merge_end - start});
-    // const doc_str = try doc1.toString();
-    // defer doc_str.deinit();
-    // const doc2_str = try doc2.toString();
-    // defer doc2_str.deinit();
-    // print("String matched: {any}\n", .{std.mem.eql(u8, doc_str.items, str)});
-    // print("Merged documents match: {any}\n", .{std.mem.eql(u8, doc_str.items, doc2_str.items)});
 }
