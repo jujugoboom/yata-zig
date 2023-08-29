@@ -197,6 +197,9 @@ pub const Doc = struct {
         var remaining = len;
         var o = pos.?.right;
         while (remaining > 0 and o != null) {
+            if (o.?.isDeleted) {
+                continue;
+            }
             if (o.?.content.len > remaining) {
                 _ = try o.?.splice(o.?, remaining);
             }
