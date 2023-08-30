@@ -4,8 +4,8 @@ const std = @import("std");
 pub const ItemId = struct {
     clientId: usize,
     seqId: usize,
-    pub fn eql(self: ItemId, other: ItemId) bool {
-        return self.clientId == other.clientId and self.seqId == other.seqId;
+    pub fn eql(self: ItemId, other: ?ItemId) bool {
+        return other != null and self.clientId == other.?.clientId and self.seqId == other.?.seqId;
     }
 };
 
@@ -15,7 +15,7 @@ const ItemSplice = *const fn (self: *Item, idx: usize) anyerror!*Item;
 /// TODO: Handle any content type with len
 pub const Item = struct {
     id: ItemId,
-    originLeft: ?ItemId,
+    originLeft: ItemId,
     originRight: ?ItemId,
     left: ?*Item,
     right: ?*Item,
@@ -24,8 +24,8 @@ pub const Item = struct {
     allocator: std.mem.Allocator,
     splice: ItemSplice,
     allocatedContent: bool,
-    /// Inits new item with allocator. Caller is responsible for calling Item.deinit()
-    pub fn init(id: ItemId, originLeft: ?ItemId, originRight: ?ItemId, left: ?*Item, right: ?*Item, content: []const u8, isDeleted: bool, allocator: std.mem.Allocator, splice: ItemSplice, allocatedContent: bool) !*Item {
+    /// Inits new item with allocator. Caller is responsible for calling Item.deinit().
+    pub fn init(id: ItemId, originLeft: ItemId, originRight: ?ItemId, left: ?*Item, right: ?*Item, content: []const u8, isDeleted: bool, allocator: std.mem.Allocator, splice: ItemSplice, allocatedContent: bool) !*Item {
         var new_item = try allocator.create(Item);
         new_item.* = .{ .id = id, .originLeft = originLeft, .originRight = originRight, .left = left, .right = right, .content = content, .isDeleted = isDeleted, .allocator = allocator, .splice = splice, .allocatedContent = allocatedContent };
         return new_item;
@@ -33,6 +33,14 @@ pub const Item = struct {
     /// Deinits self, calling free on content if it is heap allocated
     pub fn deinit(self: *Item) void {
         if (self.allocatedContent) self.allocator.free(self.content);
+        if (self.left) |left| {
+            left.right = null;
+        }
+        if (self.right) |right| {
+            right.left = null;
+        }
+        self.left = null;
+        self.right = null;
         self.allocator.destroy(self);
     }
     /// Basic formatting for item struct
@@ -50,12 +58,12 @@ pub const Item = struct {
     pub fn clone(self: *Item) !*Item {
         var content = try self.allocator.alloc(u8, self.content.len);
         @memcpy(content.ptr, self.content.ptr, self.content.len);
-        return try Item.init(self.id, self.originLeft, self.originRight, self.left, self.right, content, self.isDeleted, self.allocator, self.splice, true);
+        return try Item.init(self.id, self.originLeft, self.originRight, null, null, content, self.isDeleted, self.allocator, self.splice, true);
     }
 };
 
-/// ItemId with maxInt clientId and seqId, used as an invalid value
-pub const InvalidItemId = ItemId{ .clientId = std.math.maxInt(usize), .seqId = std.math.maxInt(usize) };
+/// ItemId with maxInt clientId and seqId, used as a sentinel value for document head
+pub const HeadItemId = ItemId{ .clientId = std.math.maxInt(usize), .seqId = 0 };
 
 /// Splices string items, abstracted away from item struct to allow future items to accept any content type
 pub fn spliceStringItem(self: *Item, idx: usize) !*Item {
@@ -63,7 +71,7 @@ pub fn spliceStringItem(self: *Item, idx: usize) !*Item {
         // Deleted, dont care
         return self;
     }
-    const right = try Item.init(ItemId{ .clientId = self.id.clientId, .seqId = self.id.seqId + idx }, ItemId{ .clientId = self.id.clientId, .seqId = self.id.seqId + idx - 1 }, self.originRight, self, self.right, self.content[idx..], false, self.allocator, self.splice, false);
+    const right = try Item.init(ItemId{ .clientId = self.id.clientId, .seqId = self.id.seqId + idx }, self.id, self.originRight, self, self.right, self.content[idx..], false, self.allocator, self.splice, false);
     self.content = self.content[0..idx];
     self.right = right;
     return self;

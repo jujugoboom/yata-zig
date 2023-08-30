@@ -38,8 +38,9 @@ pub fn bench(str: []const u8, allocator: std.mem.Allocator) !std.meta.Tuple(&.{ 
 }
 
 pub fn main() !void {
-    var arena_allocator = std.heap.ArenaAllocator.init(std.heap.page_allocator);
-    var allocator = arena_allocator.allocator();
+    // var arena_allocator = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    // var allocator = arena_allocator.allocator();
+    var allocator = std.heap.c_allocator;
     const str = try generateString(6000, allocator);
     defer allocator.free(str);
     var avg_insert: i64 = 0;
@@ -47,8 +48,8 @@ pub fn main() !void {
     var avg_delta_merge: i64 = 0;
     var i: usize = 0;
     var progress = std.Progress{};
-    var node = progress.start("Bench", 100);
-    while (i < 100) : (i += 1) {
+    var node = progress.start("Bench", 1);
+    while (i < 1) : (i += 1) {
         const result = try bench(str, allocator);
         avg_insert += result[0];
         avg_insert = @divTrunc(avg_insert, @as(i64, 2));

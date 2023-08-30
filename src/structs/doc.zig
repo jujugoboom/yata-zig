@@ -10,12 +10,19 @@ const MergeError = error{ MissingOperation, MissingParent };
 const DocDelta = struct {
     delta: ?*item.Item,
     tombstones: std.AutoHashMap(item.ItemId, void),
+    allocator: std.mem.Allocator,
+    pub fn init(delta: ?*item.Item, tombstones: std.AutoHashMap(item.ItemId, void), allocator: std.mem.Allocator) !*DocDelta {
+        var doc_delta = try allocator.create(DocDelta);
+        doc_delta.* = .{ .delta = delta, .tombstones = tombstones, .allocator = allocator };
+        return doc_delta;
+    }
     pub fn deinit(self: *DocDelta) void {
         self.tombstones.deinit();
         var it = DocIterator{ .curr_item = self.delta };
         while (it.next()) |curr_item| {
             curr_item.deinit();
         }
+        self.allocator.destroy(self);
     }
 };
 
@@ -31,16 +38,24 @@ const DocIterator = struct {
 
 /// Main doc struct. Contains all logic for YATA CRDT and handles all item creation
 pub const Doc = struct {
-    head: ?*item.Item,
+    head: *item.Item,
     allocator: std.mem.Allocator,
+    fn createHeadItem(allocator: std.mem.Allocator) !*item.Item {
+        return item.Item.init(item.HeadItemId, item.HeadItemId, null, null, null, "", false, allocator, item.spliceStringItem, false);
+    }
     /// Inits new doc with supplied allocator. Caller is responsible for calling Doc.deinit()
-    pub fn init(allocator: std.mem.Allocator) Doc {
-        return Doc{ .head = null, .allocator = allocator };
+    pub fn init(allocator: std.mem.Allocator) !*Doc {
+        var new_doc = try allocator.create(Doc);
+        var head_it = try createHeadItem(allocator);
+        new_doc.* = .{ .head = head_it, .allocator = allocator };
+        return new_doc;
     }
 
     /// Basic wrapper around creating a duplicate of a doc
-    fn withHead(allocator: std.mem.Allocator, head: ?*item.Item) Doc {
-        return Doc{ .head = head, .allocator = allocator };
+    fn withHead(allocator: std.mem.Allocator, head: *item.Item) !*Doc {
+        var new_doc = try allocator.create(Doc);
+        new_doc.* = .{ .head = head, .allocator = allocator };
+        return new_doc;
     }
 
     /// Doc destructor
@@ -49,20 +64,24 @@ pub const Doc = struct {
         while (it.next()) |curr_item| {
             curr_item.deinit();
         }
+        self.allocator.destroy(self);
+    }
+
+    fn deinit_no_items(self: *Doc) void {
+        self.allocator.destroy(self);
     }
 
     /// Creates DocIterator for doc
-    pub fn iter(self: Doc) DocIterator {
+    pub fn iter(self: *Doc) DocIterator {
         return DocIterator{ .curr_item = self.head };
     }
 
     /// Clones self into a new doc. Allocates new doc with existing allocator, caller is responsible for calling Doc.deinit() on returned doc.
-    pub fn clone(self: *Doc) !Doc {
+    pub fn clone(self: *Doc) !*Doc {
         var item_map = std.AutoHashMap(*item.Item, *item.Item).init(self.allocator);
         defer item_map.deinit();
         var it = self.iter();
         var head: ?*item.Item = null;
-        var alloc_content = std.ArrayList([]const u8).init(self.allocator);
         while (it.next()) |curr_item| {
             var new_item = try curr_item.clone();
             try item_map.put(curr_item, new_item);
@@ -78,15 +97,12 @@ pub const Doc = struct {
                 new_item.?.right = item_map.get(right);
             }
         }
-        return Doc.withHead(self.allocator, head, alloc_content);
+        return try Doc.withHead(self.allocator, head);
     }
 
     /// Returns ArrayList of u8 containing all content inside doc. Caller responsible for calling ArrayList.deinit()
-    pub fn toString(self: Doc) !std.ArrayList(u8) {
+    pub fn toString(self: *Doc) !std.ArrayList(u8) {
         var buf = std.ArrayList(u8).init(self.allocator);
-        if (self.head == null) {
-            return buf;
-        }
         var it = self.iter();
         while (it.next()) |curr_item| {
             try buf.appendSlice(curr_item.content);
@@ -95,7 +111,7 @@ pub const Doc = struct {
     }
 
     /// Gets item given item id
-    fn getItem(self: Doc, id: item.ItemId) ?*item.Item {
+    fn getItem(self: *Doc, id: item.ItemId) ?*item.Item {
         var it = self.iter();
         while (it.next()) |curr_item| {
             if (curr_item.id.clientId == id.clientId and curr_item.id.seqId >= id.seqId and curr_item.id.seqId + curr_item.content.len <= id.seqId) {
@@ -106,9 +122,9 @@ pub const Doc = struct {
     }
 
     /// Finds position in doc, will split items to create position
-    fn findPosition(self: *Doc, index: usize) !?*item.Item {
+    fn findPosition(self: *Doc, index: usize) !*item.Item {
         var remaining = index;
-        var last: ?*item.Item = self.head;
+        var last: *item.Item = self.head;
         var it = self.iter();
         while (it.next()) |currItem| {
             if (remaining <= 0) {
@@ -128,7 +144,7 @@ pub const Doc = struct {
     }
 
     /// Gets next sequence id in doc for given clientId
-    fn getNextSeqId(self: Doc, clientId: usize) usize {
+    fn getNextSeqId(self: *Doc, clientId: usize) usize {
         var last_item: ?*item.Item = null;
         var it = self.iter();
         while (it.next()) |curr_item| {
@@ -145,7 +161,7 @@ pub const Doc = struct {
     }
 
     /// Gets last item in doc for given clientId
-    fn getLastItem(self: Doc, clientId: usize) ?*item.Item {
+    fn getLastItem(self: *Doc, clientId: usize) ?*item.Item {
         var last_item: ?*item.Item = null;
         var it = self.iter();
         while (it.next()) |curr_item| {
@@ -162,28 +178,18 @@ pub const Doc = struct {
     /// Inserts new item at index with clientId, splitting existing items when needed
     pub fn insert(self: *Doc, clientId: usize, index: usize, value: []const u8) !void {
         const seqId = self.getNextSeqId(clientId);
-        var new_item = try item.Item.init(item.ItemId{ .clientId = clientId, .seqId = seqId }, null, null, null, null, value, false, self.allocator, &item.spliceStringItem, false);
-        if (self.head == null) {
-            self.head = new_item;
-            return;
-        }
         var pos = try self.findPosition(index);
-        new_item.originLeft = pos.?.id;
-        new_item.originRight = if (pos.?.right) |right| right.id else null;
-        new_item.left = pos;
-        new_item.right = pos.?.right;
+        const origin_right = if (pos.right) |right| right.id else null;
+        var new_item = try item.Item.init(item.ItemId{ .clientId = clientId, .seqId = seqId }, pos.id, origin_right, pos, pos.right, value, false, self.allocator, &item.spliceStringItem, false);
         if (new_item.right) |right_item| right_item.left = new_item;
-        pos.?.right = new_item;
+        pos.right = new_item;
     }
 
     /// Marks index for deletion
     pub fn delete(self: *Doc, index: usize, len: usize) !void {
         const pos = try self.findPosition(index);
-        if (pos == null) {
-            return;
-        }
         var remaining = len;
-        var o = pos.?.right;
+        var o = pos.right;
         while (remaining > 0 and o != null) {
             if (o.?.isDeleted) {
                 continue;
@@ -198,23 +204,23 @@ pub const Doc = struct {
     }
 
     /// Main conflict resolution, finds insert position given originLeft and originRight pointers. preceedingItems should contain all ItemIds before originLeft in document
-    fn findInsertPosition(self: *Doc, block: *item.Item, originLeft: ?*item.Item, originRight: ?*item.Item, preceedingItems: *std.AutoHashMap(item.ItemId, void)) ?*item.Item {
+    fn findInsertPosition(self: *Doc, block: *item.Item, origin_left: *item.Item, origin_right: ?*item.Item, preceeding_items: *std.AutoHashMap(item.ItemId, void)) ?*item.Item {
         var scanning = false;
-        const left_id = if (originLeft) |left_it| left_it.id else item.InvalidItemId;
-        const right_id = if (originRight) |right_it| right_it.id else item.InvalidItemId;
-        var o = if (originLeft) |left_it| left_it.right else self.head;
-        var dst = if (originLeft) |left_it| left_it.right else self.head;
+        const right_id = if (origin_right) |o_r| o_r.id else null;
+        const left_id = origin_left.id;
+        var o = if (!left_id.eql(item.HeadItemId)) origin_left.right else self.head;
+        var dst = if (!left_id.eql(item.HeadItemId)) origin_left.right else self.head;
         const client_id = block.id.clientId;
         while (true) {
             dst = if (scanning) dst else o;
-            if (o == null or right_id.eql(o.?.id)) break;
+            if (o == null or o.?.id.eql(right_id)) break;
             const o_left = o.?.originLeft;
             const o_right = o.?.originRight;
             const o_client_id = o.?.id.clientId;
-            if (preceedingItems.contains(o_left orelse item.InvalidItemId) or (left_id.eql(o_left orelse item.InvalidItemId) and right_id.eql(o_right orelse item.InvalidItemId) and client_id <= o_client_id)) {
+            if (preceeding_items.contains(o_left) or (left_id.eql(o_left) and ((o_right == null and right_id == null) or right_id.?.eql(o_right)) and client_id <= o_client_id)) {
                 break;
             }
-            scanning = if (left_id.eql(o_left orelse item.InvalidItemId)) client_id <= o_client_id else scanning;
+            scanning = if (left_id.eql(o_left)) client_id <= o_client_id else scanning;
             o = o.?.right;
         }
         return dst;
@@ -229,37 +235,44 @@ pub const Doc = struct {
         if (next != seq_id) {
             if (last != null and seq_id < last.?.id.seqId + last.?.content.len) {
                 // Found split in content, splice now
-                _ = try self.findPosition(new_item.originLeft.?.seqId);
+                _ = try last.?.splice(last.?, seq_id - last.?.id.seqId);
                 new_item.deinit();
                 return;
             } else {
                 return error.MissingOperation;
             }
         }
-        if (self.head == null) {
-            // First element
-            self.head = new_item;
+        if (self.head.right == null) {
+            // inserting at head
+            self.head.right = new_item;
+            new_item.left = self.head;
             return;
         }
-        var left: ?*item.Item = null;
+        var left: *item.Item = self.head;
         var right: ?*item.Item = null;
         var it = self.iter();
         var preceedingItems = std.AutoHashMap(item.ItemId, void).init(self.allocator);
         defer preceedingItems.deinit();
         while (it.next()) |curr_item| {
-            if (curr_item.id.eql(new_item.originLeft orelse item.InvalidItemId)) {
+            if (curr_item.id.eql(new_item.originLeft)) {
                 left = curr_item;
             }
-            if (left == null) {
+            if (left == self.head) {
                 try preceedingItems.put(curr_item.id, {});
             }
-            if (std.meta.eql(curr_item.id, new_item.originRight orelse item.InvalidItemId)) {
+            if (curr_item.id.eql(new_item.originRight)) {
                 right = curr_item;
             }
         }
-        const i = self.findInsertPosition(new_item, left, right, &preceedingItems);
+        if (left.right == null and right == null) {
+            // appending to end of list
+            left.right = new_item;
+            new_item.left = left;
+            new_item.right = null;
+            return;
+        }
+        var i = self.findInsertPosition(new_item, left, right, &preceedingItems);
         new_item.right = i;
-        new_item.left = null;
         if (i) |i_it| {
             new_item.left = i_it.left;
             if (new_item.left) |left_it| left_it.right = new_item;
@@ -268,12 +281,12 @@ pub const Doc = struct {
     }
 
     /// Merge other doc into this doc. Copies all items from other doc
-    pub fn merge(self: *Doc, other: Doc) !void {
+    pub fn merge(self: *Doc, other: *Doc) !void {
         var seen = std.AutoHashMap(item.ItemId, void).init(self.allocator);
         defer seen.deinit();
         var it = self.iter();
         while (it.next()) |curr_item| {
-            if (curr_item.content.len == 0) {
+            if (curr_item != self.head and curr_item.content.len == 0) {
                 curr_item.isDeleted = true;
             }
             if (!curr_item.isDeleted) {
@@ -291,7 +304,7 @@ pub const Doc = struct {
         var remaining = blocks.items.len;
         while (remaining > 0) {
             for (blocks.items) |block| {
-                const canInsert = !seen.contains(block.id) and (block.originLeft == null or seen.contains(block.originLeft.?)) and (block.originRight == null or seen.contains(block.originRight.?));
+                const canInsert = !seen.contains(block.id) and seen.contains(block.originLeft) and (block.originRight == null or seen.contains(block.originRight.?));
                 if (canInsert) {
                     var new_item = try block.clone();
                     try self.integrate(new_item);
@@ -303,7 +316,7 @@ pub const Doc = struct {
     }
 
     /// Gets current version map (clientId => max(seqId)) for doc
-    fn version(self: Doc) !std.AutoHashMap(usize, usize) {
+    fn version(self: *Doc) !std.AutoHashMap(usize, usize) {
         var version_map = std.AutoHashMap(usize, usize).init(self.allocator);
         var it = self.iter();
         while (it.next()) |curr_item| {
@@ -316,7 +329,7 @@ pub const Doc = struct {
     }
 
     /// Generates DocDelta between this doc and provided other doc. Caller responsible for calling DocDelta.deinit()
-    pub fn delta(self: Doc, doc: Doc) !DocDelta {
+    pub fn delta(self: *Doc, doc: *Doc) !*DocDelta {
         var delta_head: ?*item.Item = null;
         var curr_delta: ?*item.Item = null;
         var tombstones = std.AutoHashMap(item.ItemId, void).init(self.allocator);
@@ -332,7 +345,7 @@ pub const Doc = struct {
                     curr_delta.?.left = null;
                 } else {
                     curr_delta.?.right = try curr_item.clone();
-                    const old_delta = curr_delta;
+                    var old_delta = curr_delta;
                     curr_delta = curr_delta.?.right;
                     curr_delta.?.left = old_delta;
                 }
@@ -341,12 +354,19 @@ pub const Doc = struct {
                 try tombstones.put(curr_item.id, {});
             }
         }
-        return DocDelta{ .delta = delta_head, .tombstones = tombstones };
+        return DocDelta.init(delta_head, tombstones, self.allocator);
     }
 
     /// Merges a DocDelta into this doc, copying all items
     pub fn mergeDelta(self: *Doc, doc_delta: *DocDelta) !void {
-        var delta_doc = Doc.withHead(self.allocator, doc_delta.delta);
+        var head = try Doc.createHeadItem(self.allocator);
+        if (doc_delta.delta) |d| {
+            const null_head = head;
+            head = d;
+            null_head.deinit();
+        }
+        var delta_doc = try Doc.withHead(self.allocator, head);
+        defer delta_doc.deinit_no_items();
         try self.merge(delta_doc);
         var it = self.iter();
         while (it.next()) |curr_item| {
@@ -358,7 +378,7 @@ pub const Doc = struct {
 };
 
 test "Create doc test" {
-    var doc = Doc.init(testing.allocator);
+    var doc = try Doc.init(testing.allocator);
     defer doc.deinit();
     try doc.insert(1, 0, "Hello");
     const result1 = try doc.toString();
@@ -371,7 +391,7 @@ test "Create doc test" {
 }
 
 test "Delete text test" {
-    var doc = Doc.init(testing.allocator);
+    var doc = try Doc.init(testing.allocator);
     defer doc.deinit();
     try doc.insert(1, 0, "Hello World");
     const result1 = try doc.toString();
@@ -384,11 +404,11 @@ test "Delete text test" {
 }
 
 test "Merge docs test" {
-    var doc1 = Doc.init(testing.allocator);
+    var doc1 = try Doc.init(testing.allocator);
     defer doc1.deinit();
     try doc1.insert(1, 0, "Hello");
 
-    var doc2 = Doc.init(testing.allocator);
+    var doc2 = try Doc.init(testing.allocator);
     defer doc2.deinit();
     try doc2.insert(1, 0, "Hello");
     try doc2.insert(2, 2, "p");
@@ -406,11 +426,11 @@ test "Merge docs test" {
 }
 
 test "delta merge docs test" {
-    var doc1 = Doc.init(testing.allocator);
+    var doc1 = try Doc.init(testing.allocator);
     defer doc1.deinit();
     try doc1.insert(1, 0, "Hello");
 
-    var doc2 = Doc.init(testing.allocator);
+    var doc2 = try Doc.init(testing.allocator);
     defer doc2.deinit();
     try doc2.insert(1, 0, "Hello");
     try doc2.insert(2, 1, "p");
@@ -421,12 +441,55 @@ test "delta merge docs test" {
     defer doc2_delta.deinit();
     try expect(doc2_delta.delta.?.right == null);
     try expect(doc1_delta.delta.?.right == null);
-    try doc1.mergeDelta(&doc1_delta);
-    try doc2.mergeDelta(&doc2_delta);
+    try doc1.mergeDelta(doc1_delta);
+    try doc2.mergeDelta(doc2_delta);
     const doc1_res = try doc1.toString();
     defer doc1_res.deinit();
     const doc2_res = try doc2.toString();
     defer doc2_res.deinit();
     try expect(std.mem.eql(u8, doc1_res.items, "Hrpello"));
     try expect(std.mem.eql(u8, doc1_res.items, doc2_res.items));
+}
+
+fn generateString(n: usize, allocator: std.mem.Allocator) ![]const u8 {
+    var prng = std.rand.DefaultPrng.init(0);
+    const rng = prng.random();
+    var res = try allocator.alloc(u8, n);
+    for (res[0..]) |_, i| {
+        res[i] = rng.intRangeAtMost(u8, 33, 126);
+    }
+    return res;
+}
+
+fn bench(str: []const u8, allocator: std.mem.Allocator) !std.meta.Tuple(&.{ *Doc, *Doc, *Doc }) {
+    var doc1 = try Doc.init(allocator);
+    var doc2 = try Doc.init(allocator);
+    var doc3 = try Doc.init(allocator);
+    var i: usize = 0;
+    while (i < str.len) : (i += 1) {
+        try doc1.insert(1, i, str[i .. i + 1]);
+    }
+    try doc2.merge(doc1);
+    var delta = try doc3.delta(doc1);
+    defer delta.deinit();
+    try doc3.mergeDelta(delta);
+    return .{ doc1, doc2, doc3 };
+}
+
+test "large doc operation memory leak test" {
+    const str = try generateString(2, testing.allocator);
+    defer testing.allocator.free(str);
+    const result = try bench(str, testing.allocator);
+    defer result[0].deinit();
+    defer result[1].deinit();
+    defer result[2].deinit();
+    const res1 = try result[0].toString();
+    defer res1.deinit();
+    try expect(std.mem.eql(u8, res1.items, str));
+    const res2 = try result[1].toString();
+    defer res2.deinit();
+    try expect(std.mem.eql(u8, res1.items, res2.items));
+    const res3 = try result[2].toString();
+    defer res3.deinit();
+    try expect(std.mem.eql(u8, res3.items, res1.items));
 }
