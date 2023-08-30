@@ -279,6 +279,8 @@ pub const Doc = struct {
         var left: *item.Item = self.head;
         var right: ?*item.Item = null;
         var it = self.iter();
+        // Finding the preceeding items and storing them in a hash map is what takes the most amount of time in this function
+        // Unusre of how to optimize HashMap.put(), and unsure of another structure that would be significantly faster
         var preceedingItems = std.AutoHashMap(item.ItemId, void).init(self.allocator);
         defer preceedingItems.deinit();
         try preceedingItems.ensureTotalCapacity(self.items + 100);
