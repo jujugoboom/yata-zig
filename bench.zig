@@ -17,11 +17,12 @@ fn generateString(n: usize, allocator: std.mem.Allocator) ![]const u8 {
 }
 
 pub fn bench(str: []const u8, allocator: std.mem.Allocator) !std.meta.Tuple(&.{ i64, i64, i64 }) {
-    var doc1 = Doc.init(allocator);
+    var doc1 = try Doc.init(allocator);
     defer doc1.deinit();
-    var doc2 = Doc.init(allocator);
+    var doc2 = try Doc.init(allocator);
     defer doc2.deinit();
-    var doc3 = Doc.init(allocator);
+    var doc3 = try Doc.init(allocator);
+    defer doc3.deinit();
     const start = std.time.milliTimestamp();
     var i: usize = 0;
     while (i < str.len) : (i += 1) {
@@ -32,7 +33,7 @@ pub fn bench(str: []const u8, allocator: std.mem.Allocator) !std.meta.Tuple(&.{ 
     const merge_end = std.time.milliTimestamp();
     var delta = try doc3.delta(doc1);
     defer delta.deinit();
-    try doc3.mergeDelta(&delta);
+    try doc3.mergeDelta(delta);
     const delta_merge_end = std.time.milliTimestamp();
     return .{ insert_end - start, merge_end - insert_end, delta_merge_end - merge_end };
 }
