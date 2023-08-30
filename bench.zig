@@ -53,11 +53,11 @@ pub fn main() !void {
     while (i < 1) : (i += 1) {
         const result = try bench(str, allocator);
         avg_insert += result[0];
-        avg_insert = @divTrunc(avg_insert, @as(i64, 2));
+        avg_insert = @divTrunc(avg_insert, @as(i64, if (i == 0) 1 else 2));
         avg_merge += result[1];
-        avg_merge = @divTrunc(avg_merge, @as(i64, 2));
+        avg_merge = @divTrunc(avg_merge, @as(i64, if (i == 0) 1 else 2));
         avg_delta_merge += result[2];
-        avg_delta_merge = @divTrunc(avg_delta_merge, @as(i64, 2));
+        avg_delta_merge = @divTrunc(avg_delta_merge, @as(i64, if (i == 0) 1 else 2));
         node.completeOne();
     }
     node.end();

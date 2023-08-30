@@ -40,21 +40,41 @@ const DocIterator = struct {
 pub const Doc = struct {
     head: *item.Item,
     allocator: std.mem.Allocator,
+    len: usize,
+    items: u32,
     fn createHeadItem(allocator: std.mem.Allocator) !*item.Item {
-        return item.Item.init(item.HeadItemId, item.HeadItemId, null, null, null, "", false, allocator, item.spliceStringItem, false);
+        return item.Item.init(
+            item.HeadItemId,
+            item.HeadItemId,
+            null,
+            null,
+            null,
+            "",
+            false,
+            allocator,
+            item.spliceStringItem,
+            false,
+        );
     }
     /// Inits new doc with supplied allocator. Caller is responsible for calling Doc.deinit()
     pub fn init(allocator: std.mem.Allocator) !*Doc {
         var new_doc = try allocator.create(Doc);
         var head_it = try createHeadItem(allocator);
-        new_doc.* = .{ .head = head_it, .allocator = allocator };
+        new_doc.* = .{ .head = head_it, .allocator = allocator, .len = 0, .items = 1 };
         return new_doc;
     }
 
     /// Basic wrapper around creating a duplicate of a doc
     fn withHead(allocator: std.mem.Allocator, head: *item.Item) !*Doc {
         var new_doc = try allocator.create(Doc);
-        new_doc.* = .{ .head = head, .allocator = allocator };
+        var len: usize = 0;
+        var items: u32 = 0;
+        var it = DocIterator{ .curr_item = head };
+        while (it.next()) |curr_item| {
+            len += curr_item.content.len;
+            items += 1;
+        }
+        new_doc.* = .{ .head = head, .allocator = allocator, .len = len, .items = items };
         return new_doc;
     }
 
@@ -134,6 +154,7 @@ pub const Doc = struct {
                 if (currItem.content.len > remaining) {
                     last = try currItem.splice(currItem, remaining);
                     remaining -= currItem.content.len;
+                    self.items += 1;
                     continue;
                 }
                 remaining -= currItem.content.len;
@@ -183,6 +204,8 @@ pub const Doc = struct {
         var new_item = try item.Item.init(item.ItemId{ .clientId = clientId, .seqId = seqId }, pos.id, origin_right, pos, pos.right, value, false, self.allocator, &item.spliceStringItem, false);
         if (new_item.right) |right_item| right_item.left = new_item;
         pos.right = new_item;
+        self.items += 1;
+        self.len += value.len;
     }
 
     /// Marks index for deletion
@@ -200,7 +223,9 @@ pub const Doc = struct {
             remaining -= o.?.content.len;
             o.?.content = "";
             o = o.?.right;
+            self.items -= 1;
         }
+        self.len -= len - remaining;
     }
 
     /// Main conflict resolution, finds insert position given originLeft and originRight pointers. preceedingItems should contain all ItemIds before originLeft in document
@@ -236,6 +261,7 @@ pub const Doc = struct {
             if (last != null and seq_id < last.?.id.seqId + last.?.content.len) {
                 // Found split in content, splice now
                 _ = try last.?.splice(last.?, seq_id - last.?.id.seqId);
+                self.items += 1;
                 new_item.deinit();
                 return;
             } else {
@@ -246,6 +272,8 @@ pub const Doc = struct {
             // inserting at head
             self.head.right = new_item;
             new_item.left = self.head;
+            self.len += new_item.content.len;
+            self.items += 1;
             return;
         }
         var left: *item.Item = self.head;
@@ -253,7 +281,11 @@ pub const Doc = struct {
         var it = self.iter();
         var preceedingItems = std.AutoHashMap(item.ItemId, void).init(self.allocator);
         defer preceedingItems.deinit();
+        try preceedingItems.ensureTotalCapacity(self.items + 100);
         while (it.next()) |curr_item| {
+            if ((left != self.head or new_item.originLeft.eql(self.head.id)) and (right != null or new_item.originRight == null)) {
+                break;
+            }
             if (curr_item.id.eql(new_item.originLeft)) {
                 left = curr_item;
             }
@@ -264,11 +296,15 @@ pub const Doc = struct {
                 right = curr_item;
             }
         }
+        const find_preceeding = std.time.milliTimestamp();
+        _ = find_preceeding;
         if (left.right == null and right == null) {
             // appending to end of list
             left.right = new_item;
             new_item.left = left;
             new_item.right = null;
+            self.len += new_item.content.len;
+            self.items += 1;
             return;
         }
         var i = self.findInsertPosition(new_item, left, right, &preceedingItems);
@@ -278,11 +314,14 @@ pub const Doc = struct {
             if (new_item.left) |left_it| left_it.right = new_item;
             i_it.left = new_item;
         }
+        self.len += new_item.content.len;
+        self.items += 1;
     }
 
     /// Merge other doc into this doc. Copies all items from other doc
     pub fn merge(self: *Doc, other: *Doc) !void {
         var seen = std.AutoHashMap(item.ItemId, void).init(self.allocator);
+        try seen.ensureTotalCapacity(self.items);
         defer seen.deinit();
         var it = self.iter();
         while (it.next()) |curr_item| {
@@ -293,7 +332,7 @@ pub const Doc = struct {
                 try seen.put(curr_item.id, {});
             }
         }
-        var blocks = std.ArrayList(*item.Item).init(self.allocator);
+        var blocks = try std.ArrayList(*item.Item).initCapacity(self.allocator, other.items);
         defer blocks.deinit();
         var other_it = other.iter();
         while (other_it.next()) |curr_item| {
