@@ -9,9 +9,9 @@ const MergeError = error{ MissingOperation, MissingParent };
 /// Struct to hold delta between two docs. Generated through Doc.delta()
 const DocDelta = struct {
     delta: ?*item.Item,
-    tombstones: std.AutoHashMap(item.ItemId, void),
+    tombstones: item.ItemIdSet,
     allocator: std.mem.Allocator,
-    pub fn init(delta: ?*item.Item, tombstones: std.AutoHashMap(item.ItemId, void), allocator: std.mem.Allocator) !*DocDelta {
+    pub fn init(delta: ?*item.Item, tombstones: item.ItemIdSet, allocator: std.mem.Allocator) !*DocDelta {
         var doc_delta = try allocator.create(DocDelta);
         doc_delta.* = .{ .delta = delta, .tombstones = tombstones, .allocator = allocator };
         return doc_delta;
@@ -98,8 +98,9 @@ pub const Doc = struct {
 
     /// Clones self into a new doc. Allocates new doc with existing allocator, caller is responsible for calling Doc.deinit() on returned doc.
     pub fn clone(self: *Doc) !*Doc {
-        var item_map = std.AutoHashMap(*item.Item, *item.Item).init(self.allocator);
+        var item_map = std.HashMap(*item.Item, *item.Item, item.ItemContext, 80).init(self.allocator);
         defer item_map.deinit();
+        item_map.ensureTotalCapacity(self.items);
         var it = self.iter();
         var head: ?*item.Item = null;
         while (it.next()) |curr_item| {
@@ -229,7 +230,7 @@ pub const Doc = struct {
     }
 
     /// Main conflict resolution, finds insert position given originLeft and originRight pointers. preceedingItems should contain all ItemIds before originLeft in document
-    fn findInsertPosition(self: *Doc, block: *item.Item, origin_left: *item.Item, origin_right: ?*item.Item, preceeding_items: *std.AutoHashMap(item.ItemId, void)) ?*item.Item {
+    fn findInsertPosition(self: *Doc, block: *item.Item, origin_left: *item.Item, origin_right: ?*item.Item, preceeding_items: *item.ItemIdSet) ?*item.Item {
         var scanning = false;
         const right_id = if (origin_right) |o_r| o_r.id else null;
         const left_id = origin_left.id;
@@ -280,8 +281,8 @@ pub const Doc = struct {
         var right: ?*item.Item = null;
         var it = self.iter();
         // Finding the preceeding items and storing them in a hash map is what takes the most amount of time in this function
-        // Unusre of how to optimize HashMap.put(), and unsure of another structure that would be significantly faster
-        var preceedingItems = std.AutoHashMap(item.ItemId, void).init(self.allocator);
+        // Unusre of how to optimize HashMap.put(), and unsure of another structure that would be significantt
+        var preceedingItems = item.ItemIdSet.init(self.allocator);
         defer preceedingItems.deinit();
         try preceedingItems.ensureTotalCapacity(self.items + 100);
         while (it.next()) |curr_item| {
@@ -322,8 +323,8 @@ pub const Doc = struct {
 
     /// Merge other doc into this doc. Copies all items from other doc
     pub fn merge(self: *Doc, other: *Doc) !void {
-        var seen = std.AutoHashMap(item.ItemId, void).init(self.allocator);
-        try seen.ensureTotalCapacity(self.items);
+        var seen = item.ItemIdSet.init(self.allocator);
+        try seen.ensureTotalCapacity(self.items + other.items);
         defer seen.deinit();
         var it = self.iter();
         while (it.next()) |curr_item| {
@@ -373,7 +374,7 @@ pub const Doc = struct {
     pub fn delta(self: *Doc, doc: *Doc) !*DocDelta {
         var delta_head: ?*item.Item = null;
         var curr_delta: ?*item.Item = null;
-        var tombstones = std.AutoHashMap(item.ItemId, void).init(self.allocator);
+        var tombstones = item.ItemIdSet.init(self.allocator);
         var curr_version = try self.version();
         defer curr_version.deinit();
         var it = doc.iter();

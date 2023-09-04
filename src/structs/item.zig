@@ -7,7 +7,30 @@ pub const ItemId = struct {
     pub fn eql(self: ItemId, other: ?ItemId) bool {
         return other != null and self.clientId == other.?.clientId and self.seqId == other.?.seqId;
     }
+    pub fn hash(self: ItemId) u64 {
+        // Basic hash fn
+        if (self.clientId == std.math.maxInt(usize)) {
+            return 0;
+        }
+        var hash_val: u64 = 23;
+        hash_val = hash_val * 31 + self.clientId;
+        hash_val = hash_val * 31 + self.seqId;
+        return hash_val;
+    }
 };
+
+const ItemIdContext = struct {
+    pub fn eql(self: ItemIdContext, a: ItemId, b: ItemId) bool {
+        _ = self;
+        return a.eql(b);
+    }
+    pub fn hash(self: ItemIdContext, a: ItemId) u64 {
+        _ = self;
+        return a.hash();
+    }
+};
+
+pub const ItemIdSet = std.HashMap(ItemId, void, ItemIdContext, 80);
 
 const ItemSplice = *const fn (self: *Item, idx: usize) anyerror!*Item;
 
@@ -59,6 +82,28 @@ pub const Item = struct {
         var content = try self.allocator.alloc(u8, self.content.len);
         @memcpy(content.ptr, self.content.ptr, self.content.len);
         return try Item.init(self.id, self.originLeft, self.originRight, null, null, content, self.isDeleted, self.allocator, self.splice, true);
+    }
+
+    pub fn eql(self: Item, b: ?Item) bool {
+        if (b == null) {
+            return false;
+        }
+        return self.id.eql(b.?.id);
+    }
+
+    pub fn hash(self: Item) u64 {
+        return self.id.hash();
+    }
+};
+
+pub const ItemContext = struct {
+    pub fn eql(self: ItemContext, a: Item, b: Item) bool {
+        _ = self;
+        return a.eql(b);
+    }
+    pub fn hash(self: ItemIdContext, a: Item) u64 {
+        _ = self;
+        return a.hash();
     }
 };
 
