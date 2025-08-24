@@ -1,4 +1,6 @@
 const std = @import("std");
+const ws = @import("websocket");
+
 const test_targets = [_]std.Target.Query{
     .{}, // native
     .{
@@ -10,38 +12,8 @@ const test_targets = [_]std.Target.Query{
         .os_tag = .macos,
     },
 };
+
 pub fn build(b: *std.Build) void {
-    // const target = b.standardTargetOptions(.{});
-    //     const optimize = b.standardOptimizeOption(.{});
-    //
-    //     const libfizzbuzz = b.addLibrary(.{
-    //         .name = "fizzbuzz",
-    //         .linkage = .static,
-    //         .root_module = b.createModule(.{
-    //             .root_source_file = b.path("fizzbuzz.zig"),
-    //             .target = target,
-    //             .optimize = optimize,
-    //         }),
-    //     });
-    //
-    //     const exe = b.addExecutable(.{
-    //         .name = "demo",
-    //         .root_module = b.createModule(.{
-    //             .root_source_file = b.path("demo.zig"),
-    //             .target = target,
-    //             .optimize = optimize,
-    //         }),
-    //     });
-    //
-    //     exe.linkLibrary(libfizzbuzz);
-    //
-    //     b.installArtifact(libfizzbuzz);
-    //
-    //     if (b.option(bool, "enable-demo", "install the demo too") orelse false) {
-    //         b.installArtifact(exe);
-    //     }
-    // Standard release options allow the person running `zig build` to select
-    // between Debug, ReleaseSafe, ReleaseFast, and ReleaseSmall.
     const optimize = b.standardOptimizeOption(.{});
     const target = b.standardTargetOptions(.{});
 
@@ -55,7 +27,7 @@ pub fn build(b: *std.Build) void {
 
     const test_step = b.step("test", "Run library tests");
     for (test_targets) |test_target| {
-        const unit_tests = b.addTest(.{
+        const main_tests = b.addTest(.{
             .root_module = b.createModule(
                 .{
                     .root_source_file = b.path("src/main.zig"),
@@ -64,8 +36,31 @@ pub fn build(b: *std.Build) void {
             ),
         });
 
-        const run_unit_tests = b.addRunArtifact(unit_tests);
-        run_unit_tests.skip_foreign_checks = true;
-        test_step.dependOn(&run_unit_tests.step);
+        const run_main_tests = b.addRunArtifact(main_tests);
+        test_step.dependOn(&run_main_tests.step);
+
+        const doc_tests = b.addTest(.{
+            .root_module = b.createModule(
+                .{
+                    .root_source_file = b.path("src/structs/doc.zig"),
+                    .target = b.resolveTargetQuery(test_target),
+                },
+            ),
+        });
+
+        const run_doc_tests = b.addRunArtifact(doc_tests);
+        test_step.dependOn(&run_doc_tests.step);
+
+        const item_tests = b.addTest(.{
+            .root_module = b.createModule(
+                .{
+                    .root_source_file = b.path("src/structs/item.zig"),
+                    .target = b.resolveTargetQuery(test_target),
+                },
+            ),
+        });
+
+        const run_item_tests = b.addRunArtifact(item_tests);
+        test_step.dependOn(&run_item_tests.step);
     }
 }

@@ -10,7 +10,7 @@ fn generateString(n: usize, allocator: std.mem.Allocator) ![]const u8 {
     var prng = std.rand.DefaultPrng.init(0);
     const rng = prng.random();
     var res = try allocator.alloc(u8, n);
-    for (res[0..]) |_, i| {
+    for (res[0..], 0..) |_, i| {
         res[i] = rng.intRangeAtMost(u8, 33, 126);
     }
     return res;
@@ -39,9 +39,9 @@ pub fn bench(str: []const u8, allocator: std.mem.Allocator) !std.meta.Tuple(&.{ 
 }
 
 pub fn main() !void {
-    // var arena_allocator = std.heap.ArenaAllocator.init(std.heap.page_allocator);
-    // var allocator = arena_allocator.allocator();
-    var allocator = std.heap.c_allocator;
+    var arena_allocator = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    var allocator = arena_allocator.allocator();
+    // var allocator = std.heap.c_allocator;
     const str = try generateString(6000, allocator);
     defer allocator.free(str);
     var avg_insert: i64 = 0;

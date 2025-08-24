@@ -1,0 +1,12 @@
+.{
+    .name = .yata_zig,
+    .version = "0.15.1",
+    .dependencies = .{
+        .websocket = .{
+            .url = "git+https://github.com/karlseguin/websocket.zig.git#59aaa71e64a669aa90016f8a342ceeee6381b4a6",
+            .hash = "websocket-0.1.0-ZPISdYluAwBl2ckLPQ_q5_1IPEmNmaJ9vU1V0ap1-_dD",
+        },
+    },
+    .paths = .{""},
+    .fingerprint = 0x62fcd5ceb3679b79,
+}
