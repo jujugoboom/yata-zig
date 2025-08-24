@@ -49,7 +49,7 @@ pub const Item = struct {
     allocatedContent: bool,
     /// Inits new item with allocator. Caller is responsible for calling Item.deinit().
     pub fn init(id: ItemId, originLeft: ItemId, originRight: ?ItemId, left: ?*Item, right: ?*Item, content: []const u8, isDeleted: bool, allocator: std.mem.Allocator, splice: ItemSplice, allocatedContent: bool) !*Item {
-        var new_item = try allocator.create(Item);
+        const new_item = try allocator.create(Item);
         new_item.* = .{ .id = id, .originLeft = originLeft, .originRight = originRight, .left = left, .right = right, .content = content, .isDeleted = isDeleted, .allocator = allocator, .splice = splice, .allocatedContent = allocatedContent };
         return new_item;
     }
@@ -79,8 +79,8 @@ pub const Item = struct {
     }
     /// Clones self into new item allocated with current item allocator. Caller responsible for calling Item.deinit() on returned item
     pub fn clone(self: *Item) !*Item {
-        var content = try self.allocator.alloc(u8, self.content.len);
-        @memcpy(content.ptr, self.content.ptr, self.content.len);
+        const content = try self.allocator.alloc(u8, self.content.len);
+        @memcpy(content.ptr, self.content.ptr);
         return try Item.init(self.id, self.originLeft, self.originRight, null, null, content, self.isDeleted, self.allocator, self.splice, true);
     }
 

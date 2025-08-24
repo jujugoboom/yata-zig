@@ -12,7 +12,7 @@ const DocDelta = struct {
     tombstones: item.ItemIdSet,
     allocator: std.mem.Allocator,
     pub fn init(delta: ?*item.Item, tombstones: item.ItemIdSet, allocator: std.mem.Allocator) !*DocDelta {
-        var doc_delta = try allocator.create(DocDelta);
+        const doc_delta = try allocator.create(DocDelta);
         doc_delta.* = .{ .delta = delta, .tombstones = tombstones, .allocator = allocator };
         return doc_delta;
     }
@@ -58,15 +58,15 @@ pub const Doc = struct {
     }
     /// Inits new doc with supplied allocator. Caller is responsible for calling Doc.deinit()
     pub fn init(allocator: std.mem.Allocator) !*Doc {
-        var new_doc = try allocator.create(Doc);
-        var head_it = try createHeadItem(allocator);
+        const new_doc = try allocator.create(Doc);
+        const head_it = try createHeadItem(allocator);
         new_doc.* = .{ .head = head_it, .allocator = allocator, .len = 0, .items = 1 };
         return new_doc;
     }
 
     /// Basic wrapper around creating a duplicate of a doc
     fn withHead(allocator: std.mem.Allocator, head: *item.Item) !*Doc {
-        var new_doc = try allocator.create(Doc);
+        const new_doc = try allocator.create(Doc);
         var len: usize = 0;
         var items: u32 = 0;
         var it = DocIterator{ .curr_item = head };
@@ -104,7 +104,7 @@ pub const Doc = struct {
         var it = self.iter();
         var head: ?*item.Item = null;
         while (it.next()) |curr_item| {
-            var new_item = try curr_item.clone();
+            const new_item = try curr_item.clone();
             try item_map.put(curr_item, new_item);
             if (head == null) head = new_item;
         }
@@ -202,7 +202,7 @@ pub const Doc = struct {
         const seqId = self.getNextSeqId(clientId);
         var pos = try self.findPosition(index);
         const origin_right = if (pos.right) |right| right.id else null;
-        var new_item = try item.Item.init(item.ItemId{ .clientId = clientId, .seqId = seqId }, pos.id, origin_right, pos, pos.right, value, false, self.allocator, &item.spliceStringItem, false);
+        const new_item = try item.Item.init(item.ItemId{ .clientId = clientId, .seqId = seqId }, pos.id, origin_right, pos, pos.right, value, false, self.allocator, &item.spliceStringItem, false);
         if (new_item.right) |right_item| right_item.left = new_item;
         pos.right = new_item;
         self.items += 1;
@@ -310,7 +310,7 @@ pub const Doc = struct {
             self.items += 1;
             return;
         }
-        var i = self.findInsertPosition(new_item, left, right, &preceedingItems);
+        const i = self.findInsertPosition(new_item, left, right, &preceedingItems);
         new_item.right = i;
         if (i) |i_it| {
             new_item.left = i_it.left;
@@ -348,7 +348,7 @@ pub const Doc = struct {
             for (blocks.items) |block| {
                 const canInsert = !seen.contains(block.id) and seen.contains(block.originLeft) and (block.originRight == null or seen.contains(block.originRight.?));
                 if (canInsert) {
-                    var new_item = try block.clone();
+                    const new_item = try block.clone();
                     try self.integrate(new_item);
                     try seen.put(block.id, {});
                     remaining -= 1;
@@ -387,7 +387,7 @@ pub const Doc = struct {
                     curr_delta.?.left = null;
                 } else {
                     curr_delta.?.right = try curr_item.clone();
-                    var old_delta = curr_delta;
+                    const old_delta = curr_delta;
                     curr_delta = curr_delta.?.right;
                     curr_delta.?.left = old_delta;
                 }
@@ -497,7 +497,7 @@ fn generateString(n: usize, allocator: std.mem.Allocator) ![]const u8 {
     var prng = std.rand.DefaultPrng.init(0);
     const rng = prng.random();
     var res = try allocator.alloc(u8, n);
-    for (res[0..]) |_, i| {
+    for (res[0..], 0..) |_, i| {
         res[i] = rng.intRangeAtMost(u8, 33, 126);
     }
     return res;
