@@ -1,5 +1,5 @@
-const std = @import("@std");
-const ws = @import("@websocket");
+const std = @import("std");
+const ws = @import("websocket");
 pub const Doc = @import("./structs/doc.zig").Doc;
 
 pub fn main() !void {

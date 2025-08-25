@@ -80,7 +80,7 @@ pub const Item = struct {
     /// Clones self into new item allocated with current item allocator. Caller responsible for calling Item.deinit() on returned item
     pub fn clone(self: *Item) !*Item {
         const content = try self.allocator.alloc(u8, self.content.len);
-        @memcpy(content.ptr, self.content.ptr);
+        @memcpy(content, self.content);
         return try Item.init(self.id, self.originLeft, self.originRight, null, null, content, self.isDeleted, self.allocator, self.splice, true);
     }
 

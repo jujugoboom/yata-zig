@@ -123,10 +123,10 @@ pub const Doc = struct {
 
     /// Returns ArrayList of u8 containing all content inside doc. Caller responsible for calling ArrayList.deinit()
     pub fn toString(self: *Doc) !std.ArrayList(u8) {
-        var buf = std.ArrayList(u8).init(self.allocator);
+        var buf = try std.ArrayList(u8).initCapacity(self.allocator, self.len);
         var it = self.iter();
         while (it.next()) |curr_item| {
-            try buf.appendSlice(curr_item.content);
+            try buf.appendSlice(self.allocator, curr_item.content);
         }
         return buf;
     }
@@ -336,11 +336,11 @@ pub const Doc = struct {
             }
         }
         var blocks = try std.ArrayList(*item.Item).initCapacity(self.allocator, other.items);
-        defer blocks.deinit();
+        defer blocks.deinit(self.allocator);
         var other_it = other.iter();
         while (other_it.next()) |curr_item| {
             if (!seen.contains(curr_item.id)) {
-                try blocks.append(curr_item);
+                try blocks.append(self.allocator, curr_item);
             }
         }
         var remaining = blocks.items.len;
@@ -423,12 +423,12 @@ test "Create doc test" {
     var doc = try Doc.init(testing.allocator);
     defer doc.deinit();
     try doc.insert(1, 0, "Hello");
-    const result1 = try doc.toString();
-    defer result1.deinit();
+    var result1 = try doc.toString();
+    defer result1.deinit(testing.allocator);
     try expect(std.mem.eql(u8, result1.items, "Hello"));
     try doc.insert(1, 3, "p");
-    const result2 = try doc.toString();
-    defer result2.deinit();
+    var result2 = try doc.toString();
+    defer result2.deinit(testing.allocator);
     try expect(std.mem.eql(u8, result2.items, "Helplo"));
 }
 
@@ -436,12 +436,12 @@ test "Delete text test" {
     var doc = try Doc.init(testing.allocator);
     defer doc.deinit();
     try doc.insert(1, 0, "Hello World");
-    const result1 = try doc.toString();
-    defer result1.deinit();
+    var result1 = try doc.toString();
+    defer result1.deinit(testing.allocator);
     try expect(std.mem.eql(u8, result1.items, "Hello World"));
     try doc.delete(1, 3);
-    const result2 = try doc.toString();
-    defer result2.deinit();
+    var result2 = try doc.toString();
+    defer result2.deinit(testing.allocator);
     try expect(std.mem.eql(u8, result2.items, "Ho World"));
 }
 
@@ -458,10 +458,10 @@ test "Merge docs test" {
 
     try doc1.merge(doc2);
     try doc2.merge(doc1);
-    const doc1_res = try doc1.toString();
-    defer doc1_res.deinit();
-    const doc2_res = try doc2.toString();
-    defer doc2_res.deinit();
+    var doc1_res = try doc1.toString();
+    defer doc1_res.deinit(testing.allocator);
+    var doc2_res = try doc2.toString();
+    defer doc2_res.deinit(testing.allocator);
 
     try expect(std.mem.eql(u8, doc1_res.items, "Herpllo"));
     try expect(std.mem.eql(u8, doc1_res.items, doc2_res.items));
@@ -485,16 +485,16 @@ test "delta merge docs test" {
     try expect(doc1_delta.delta.?.right == null);
     try doc1.mergeDelta(doc1_delta);
     try doc2.mergeDelta(doc2_delta);
-    const doc1_res = try doc1.toString();
-    defer doc1_res.deinit();
-    const doc2_res = try doc2.toString();
-    defer doc2_res.deinit();
+    var doc1_res = try doc1.toString();
+    defer doc1_res.deinit(testing.allocator);
+    var doc2_res = try doc2.toString();
+    defer doc2_res.deinit(testing.allocator);
     try expect(std.mem.eql(u8, doc1_res.items, "Hrpello"));
     try expect(std.mem.eql(u8, doc1_res.items, doc2_res.items));
 }
 
 fn generateString(n: usize, allocator: std.mem.Allocator) ![]const u8 {
-    var prng = std.rand.DefaultPrng.init(0);
+    var prng = std.Random.DefaultPrng.init(0);
     const rng = prng.random();
     var res = try allocator.alloc(u8, n);
     for (res[0..], 0..) |_, i| {
@@ -525,13 +525,13 @@ test "large doc operation memory leak test" {
     defer result[0].deinit();
     defer result[1].deinit();
     defer result[2].deinit();
-    const res1 = try result[0].toString();
-    defer res1.deinit();
+    var res1 = try result[0].toString();
+    defer res1.deinit(testing.allocator);
     try expect(std.mem.eql(u8, res1.items, str));
-    const res2 = try result[1].toString();
-    defer res2.deinit();
+    var res2 = try result[1].toString();
+    defer res2.deinit(testing.allocator);
     try expect(std.mem.eql(u8, res1.items, res2.items));
-    const res3 = try result[2].toString();
-    defer res3.deinit();
+    var res3 = try result[2].toString();
+    defer res3.deinit(testing.allocator);
     try expect(std.mem.eql(u8, res3.items, res1.items));
 }
