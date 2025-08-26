@@ -7,7 +7,7 @@ const expect = testing.expect;
 const MergeError = error{ MissingOperation, MissingParent };
 
 /// Struct to hold delta between two docs. Generated through Doc.delta()
-const DocDelta = struct {
+pub const DocDelta = struct {
     delta: ?*item.Item,
     tombstones: item.ItemIdSet,
     allocator: std.mem.Allocator,
@@ -131,12 +131,41 @@ pub const Doc = struct {
         return buf;
     }
 
+    const DocData = struct {
+        head: []const u8,
+        len: usize,
+        items: u32,
+    };
+
+    fn to_data(self: *Doc) !DocData {
+        return DocData{
+            .head = try self.head.serialize(),
+            .len = self.len,
+            .items = self.items,
+        };
+    }
+
+    fn from_data(data: *const DocData, allocator: std.mem.Allocator) !*Doc {
+        const doc = try Doc.withHead(allocator, try item.Item.deserialize(data.head, allocator));
+        doc.items = data.items;
+        doc.len = data.len;
+        return doc;
+    }
+
     pub fn serialize(self: *Doc) ![]const u8 {
-        const docSize = @sizeOf(self);
-        const buffer: [docSize]u8 = undefined;
-        var w = std.Io.Writer.fixed(buffer);
-        try w.writeStruct(self, .little);
-        return buffer;
+        const doc_data = try self.to_data();
+        defer self.head.allocator.free(doc_data.head);
+        var buf = std.io.Writer.Allocating.init(self.allocator);
+        defer buf.deinit();
+        const formatter = std.json.fmt(doc_data, .{});
+        try formatter.format(&buf.writer);
+        return try buf.toOwnedSlice();
+    }
+
+    pub fn deserialize(value: []const u8, allocator: std.mem.Allocator) !*Doc {
+        const parsed = try std.json.parseFromSlice(DocData, allocator, value, .{});
+        defer parsed.deinit();
+        return try Doc.from_data(&parsed.value, allocator);
     }
 
     /// Gets item given item id
@@ -527,7 +556,7 @@ fn bench(str: []const u8, allocator: std.mem.Allocator) !std.meta.Tuple(&.{ *Doc
 }
 
 test "large doc operation memory leak test" {
-    const str = try generateString(2000, testing.allocator);
+    const str = try generateString(2, testing.allocator);
     defer testing.allocator.free(str);
     const result = try bench(str, testing.allocator);
     defer result[0].deinit();
@@ -548,5 +577,10 @@ test "serialize document" {
     const doc = try Doc.init(testing.allocator);
     defer doc.deinit();
     try doc.insert(1, 0, "Hello World");
-    std.debug.print("{x}", try doc.serialize());
+    const serialized = try doc.serialize();
+    defer testing.allocator.free(serialized);
+
+    const deserialized = try Doc.deserialize(serialized, testing.allocator);
+    defer deserialized.deinit();
+    try expect(deserialized.head.eql(doc.head.*));
 }

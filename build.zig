@@ -69,6 +69,7 @@ pub fn build(b: *std.Build) void {
 
     const test_step = b.step("test", "Run library tests");
     const doc_tests = b.addTest(.{
+        .name = "doc test",
         .root_module = b.createModule(
             .{
                 .root_source_file = b.path("src/structs/doc.zig"),
@@ -82,6 +83,7 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_doc_tests.step);
 
     const item_tests = b.addTest(.{
+        .name = "item test",
         .root_module = b.createModule(
             .{
                 .root_source_file = b.path("src/structs/item.zig"),
