@@ -131,6 +131,14 @@ pub const Doc = struct {
         return buf;
     }
 
+    pub fn serialize(self: *Doc) ![]const u8 {
+        const docSize = @sizeOf(self);
+        const buffer: [docSize]u8 = undefined;
+        var w = std.Io.Writer.fixed(buffer);
+        try w.writeStruct(self, .little);
+        return buffer;
+    }
+
     /// Gets item given item id
     fn getItem(self: *Doc, id: item.ItemId) ?*item.Item {
         var it = self.iter();
@@ -519,7 +527,7 @@ fn bench(str: []const u8, allocator: std.mem.Allocator) !std.meta.Tuple(&.{ *Doc
 }
 
 test "large doc operation memory leak test" {
-    const str = try generateString(2, testing.allocator);
+    const str = try generateString(2000, testing.allocator);
     defer testing.allocator.free(str);
     const result = try bench(str, testing.allocator);
     defer result[0].deinit();
@@ -534,4 +542,11 @@ test "large doc operation memory leak test" {
     var res3 = try result[2].toString();
     defer res3.deinit(testing.allocator);
     try expect(std.mem.eql(u8, res3.items, res1.items));
+}
+
+test "serialize document" {
+    const doc = try Doc.init(testing.allocator);
+    defer doc.deinit();
+    try doc.insert(1, 0, "Hello World");
+    std.debug.print("{x}", try doc.serialize());
 }

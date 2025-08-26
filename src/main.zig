@@ -1,6 +1,7 @@
 const std = @import("std");
 const ws = @import("websocket");
-pub const Doc = @import("./structs/doc.zig").Doc;
+const Handler = @import("server/handler.zig").Handler;
+const App = @import("server/app.zig").App;
 
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
@@ -20,39 +21,10 @@ pub fn main() !void {
 
     // Arbitrary (application-specific) data to pass into each handler
     // Pass void ({}) into listen if you have none
-    var app = App{};
-
+    var app: App = .{
+        .rooms = std.StringHashMap([]*ws.Conn).init(allocator),
+        .allocator = allocator,
+    };
     // this blocks
     try server.listen(&app);
 }
-
-const Handler = struct {
-    app: *App,
-    conn: *ws.Conn,
-
-    // You must define a public init function which takes
-    pub fn init(h: *ws.Handshake, conn: *ws.Conn, app: *App) !Handler {
-        // `h` contains the initial websocket "handshake" request
-        // It can be used to apply application-specific logic to verify / allow
-        // the connection (e.g. valid url, query string parameters, or headers)
-
-        _ = h; // we're not using this in our simple case
-
-        return .{
-            .app = app,
-            .conn = conn,
-        };
-    }
-
-    // You must defined a public clientMessage method
-    pub fn clientMessage(self: *Handler, data: []const u8) !void {
-        try self.conn.write(data); // echo the message back
-    }
-};
-
-// This is application-specific you want passed into your Handler's
-// init function.
-const App = struct {
-    // maybe a db pool
-    // maybe a list of rooms
-};
