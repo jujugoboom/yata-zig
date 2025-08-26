@@ -89,7 +89,7 @@ pub const Item = struct {
         if (b == null) {
             return false;
         }
-        return self.id.eql(b.?.id);
+        return (self.id.eql(b.?.id) and std.mem.eql(u8, self.content, b.?.content) and self.originLeft.eql(b.?.originLeft) and if (self.originRight != null) self.originRight.?.eql(b.?.originRight) else true);
     }
 
     pub fn hash(self: Item) u64 {

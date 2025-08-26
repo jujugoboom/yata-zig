@@ -96,6 +96,21 @@ pub const Doc = struct {
         return DocIterator{ .curr_item = self.head };
     }
 
+    pub fn eql(self: *Doc, other: ?*Doc) bool {
+        if (other == null) {
+            return false;
+        }
+        var is_eql = true;
+        var our_item: ?*item.Item = self.head;
+        var other_item: ?*item.Item = other.?.head;
+        while (is_eql and !(our_item == null and other_item == null)) {
+            is_eql = is_eql and if (our_item != null) our_item.?.eql(if (other_item != null) other_item.?.* else null) else other_item == null;
+            our_item = our_item.?.right;
+            other_item = other_item.?.right;
+        }
+        return is_eql;
+    }
+
     /// Clones self into a new doc. Allocates new doc with existing allocator, caller is responsible for calling Doc.deinit() on returned doc.
     pub fn clone(self: *Doc) !*Doc {
         var item_map = std.HashMap(*item.Item, *item.Item, item.ItemContext, 80).init(self.allocator);
@@ -146,9 +161,13 @@ pub const Doc = struct {
     }
 
     fn from_data(data: *const DocData, allocator: std.mem.Allocator) !*Doc {
-        const doc = try Doc.withHead(allocator, try item.Item.deserialize(data.head, allocator));
-        doc.items = data.items;
-        doc.len = data.len;
+        const doc = try allocator.create(Doc);
+        doc.* = .{
+            .allocator = allocator,
+            .head = try item.Item.deserialize(data.head, allocator),
+            .items = data.items,
+            .len = data.len,
+        };
         return doc;
     }
 
@@ -556,7 +575,7 @@ fn bench(str: []const u8, allocator: std.mem.Allocator) !std.meta.Tuple(&.{ *Doc
 }
 
 test "large doc operation memory leak test" {
-    const str = try generateString(2, testing.allocator);
+    const str = try generateString(2000, testing.allocator);
     defer testing.allocator.free(str);
     const result = try bench(str, testing.allocator);
     defer result[0].deinit();
@@ -579,8 +598,25 @@ test "serialize document" {
     try doc.insert(1, 0, "Hello World");
     const serialized = try doc.serialize();
     defer testing.allocator.free(serialized);
+    std.debug.print("{s}", .{serialized});
 
     const deserialized = try Doc.deserialize(serialized, testing.allocator);
     defer deserialized.deinit();
-    try expect(deserialized.head.eql(doc.head.*));
+    try expect(deserialized.eql(doc));
+
+    const doc2 = try Doc.init(testing.allocator);
+    defer doc2.deinit();
+    const str = try generateString(2000, testing.allocator);
+    defer testing.allocator.free(str);
+    var i: usize = 0;
+    while (i < str.len) : (i += 1) {
+        try doc2.insert(1, i, str[i .. i + 1]);
+    }
+    const serialized2 = try doc2.serialize();
+    defer testing.allocator.free(serialized2);
+
+    const deserialized2 = try Doc.deserialize(serialized2, testing.allocator);
+    defer deserialized2.deinit();
+    try expect(deserialized2.eql(doc2));
+    try expect(!deserialized2.eql(doc));
 }
