@@ -47,6 +47,26 @@ pub fn build(b: *std.Build) void {
     const run_cmd = b.step("run", "Run the app");
     run_cmd.dependOn(&run_step.step);
 
+    const client_example = b.addExecutable(
+        .{
+            .name = "example-client",
+            .root_module = b.createModule(
+                .{
+                    .root_source_file = b.path("examples/client.zig"),
+                    .target = target,
+                    .optimize = optimize,
+                },
+            ),
+        },
+    );
+
+    client_example.root_module.addImport("websocket", websocket);
+    b.installArtifact(client_example);
+
+    const run_client_example = b.addRunArtifact(client_example);
+    const run_client_cmd = b.step("client", "Run example client");
+    run_client_cmd.dependOn(&run_client_example.step);
+
     const test_step = b.step("test", "Run library tests");
     const doc_tests = b.addTest(.{
         .root_module = b.createModule(
