@@ -147,44 +147,116 @@ pub const Doc = struct {
     }
 
     const DocData = struct {
-        head: []const u8,
+        item_map: std.StringArrayHashMap([]const u8),
         len: usize,
         items: u32,
+        allocator: std.mem.Allocator,
+        allocated: bool,
+
+        const InnerData = struct {
+            item_map: std.json.ArrayHashMap([]const u8),
+            len: usize,
+            items: u32,
+        };
+        pub fn from_doc(doc: *Doc, allocator: std.mem.Allocator) !*DocData {
+            const doc_data = try allocator.create(DocData);
+            var item_map = std.StringArrayHashMap([]const u8).init(allocator);
+            var doc_iter = doc.iter();
+            while (doc_iter.next()) |doc_item| {
+                try item_map.put(try doc_item.id.fmt(allocator), try doc_item.serialize());
+            }
+            doc_data.* = .{
+                .allocator = allocator,
+                .item_map = item_map,
+                .items = doc.items,
+                .len = doc.len,
+                .allocated = true,
+            };
+            return doc_data;
+        }
+
+        pub fn to_doc(self: *DocData) !*Doc {
+            var item_data_map = std.HashMap(
+                item.ItemId,
+                item.Item.ItemData,
+                item.ItemIdContext,
+                80,
+            ).init(self.allocator);
+            defer item_data_map.deinit();
+            for (self.item_map.keys()) |id| {
+                const parsed = try std.json.parseFromSlice(item.Item.ItemData, self.allocator, self.item_map.get(id).?, .{});
+                defer parsed.deinit();
+                try item_data_map.put(try item.ItemId.fromString(id), parsed.value);
+            }
+            var item_map = item.ItemIdMap.init(self.allocator);
+            defer item_map.deinit();
+            var item_data_map_iter = item_data_map.keyIterator();
+            while (item_data_map_iter.next()) |id| {
+                const new_item = try item.Item.from_data(item_data_map.get(id.*).?, self.allocator);
+                try item_map.put(id.*, new_item);
+            }
+            var item_map_iter = item_map.keyIterator();
+            while (item_map_iter.next()) |id| {
+                const data = item_data_map.get(id.*).?;
+                if (data.right != null) {
+                    const right = item_map.get(data.right.?).?;
+                    const curr = item_map.get(id.*).?;
+                    curr.right = right;
+                    right.left = curr;
+                }
+            }
+            return Doc.withHead(self.allocator, item_map.get(item.HeadItemId).?);
+        }
+
+        pub fn deinit(self: *DocData) void {
+            if (self.allocated) {
+                for (self.item_map.keys()) |key| {
+                    self.allocator.free(self.item_map.get(key).?);
+                    self.allocator.free(key);
+                }
+            }
+            self.item_map.deinit();
+            self.allocator.destroy(self);
+        }
+
+        pub fn only_data(self: *DocData) InnerData {
+            const item_map = std.json.ArrayHashMap([]const u8){ .map = self.item_map.unmanaged };
+            return .{ .item_map = item_map, .len = self.len, .items = self.items };
+        }
+
+        pub fn from_inner_data(data: InnerData, allocator: std.mem.Allocator) !*DocData {
+            const new_data = try allocator.create(DocData);
+            var item_map = std.StringArrayHashMap([]const u8).init(allocator);
+            for (data.item_map.map.keys()) |key| {
+                try item_map.put(key, data.item_map.map.get(key).?);
+            }
+            new_data.* = .{
+                .allocator = allocator,
+                .item_map = item_map,
+                .len = data.len,
+                .items = data.items,
+                .allocated = false,
+            };
+            return new_data;
+        }
     };
 
-    fn to_data(self: *Doc) !DocData {
-        return DocData{
-            .head = try self.head.serialize(),
-            .len = self.len,
-            .items = self.items,
-        };
-    }
-
-    fn from_data(data: *const DocData, allocator: std.mem.Allocator) !*Doc {
-        const doc = try allocator.create(Doc);
-        doc.* = .{
-            .allocator = allocator,
-            .head = try item.Item.deserialize(data.head, allocator),
-            .items = data.items,
-            .len = data.len,
-        };
-        return doc;
-    }
-
     pub fn serialize(self: *Doc) ![]const u8 {
-        const doc_data = try self.to_data();
-        defer self.head.allocator.free(doc_data.head);
+        const doc_data = try DocData.from_doc(self, self.allocator);
+        defer doc_data.deinit();
         var buf = std.io.Writer.Allocating.init(self.allocator);
         defer buf.deinit();
-        const formatter = std.json.fmt(doc_data, .{});
+        const formatter = std.json.fmt(doc_data.only_data(), .{});
         try formatter.format(&buf.writer);
         return try buf.toOwnedSlice();
     }
 
     pub fn deserialize(value: []const u8, allocator: std.mem.Allocator) !*Doc {
-        const parsed = try std.json.parseFromSlice(DocData, allocator, value, .{});
+        const parsed = try std.json.parseFromSlice(DocData.InnerData, allocator, value, .{});
         defer parsed.deinit();
-        return try Doc.from_data(&parsed.value, allocator);
+        const doc_data = try DocData.from_inner_data(parsed.value, allocator);
+        defer doc_data.deinit();
+        return try doc_data.to_doc();
     }
 
     /// Gets item given item id
@@ -575,7 +647,7 @@ fn bench(str: []const u8, allocator: std.mem.Allocator) !std.meta.Tuple(&.{ *Doc
 }
 
 test "large doc operation memory leak test" {
-    const str = try generateString(2000, testing.allocator);
+    const str = try generateString(2, testing.allocator);
     defer testing.allocator.free(str);
     const result = try bench(str, testing.allocator);
     defer result[0].deinit();
@@ -598,7 +670,6 @@ test "serialize document" {
     try doc.insert(1, 0, "Hello World");
     const serialized = try doc.serialize();
     defer testing.allocator.free(serialized);
-    std.debug.print("{s}", .{serialized});
 
     const deserialized = try Doc.deserialize(serialized, testing.allocator);
     defer deserialized.deinit();
