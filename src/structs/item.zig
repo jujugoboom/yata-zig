@@ -33,19 +33,20 @@ pub const ItemId = struct {
     }
 };
 
-pub const ItemIdContext = struct {
-    pub fn eql(self: ItemIdContext, a: ItemId, b: ItemId) bool {
+/// Hash context for ItemId
+pub const ItemIdHashContext = struct {
+    pub fn eql(self: ItemIdHashContext, a: ItemId, b: ItemId) bool {
         _ = self;
         return a.eql(b);
     }
-    pub fn hash(self: ItemIdContext, a: ItemId) u64 {
+    pub fn hash(self: ItemIdHashContext, a: ItemId) u64 {
         _ = self;
         return a.hash();
     }
 };
 
-pub const ItemIdSet = std.HashMap(ItemId, void, ItemIdContext, 80);
-pub const ItemIdMap = std.HashMap(ItemId, *Item, ItemIdContext, 80);
+pub const ItemIdSet = std.HashMap(ItemId, void, ItemIdHashContext, 80);
+pub const ItemIdMap = std.HashMap(ItemId, *Item, ItemIdHashContext, 80);
 
 /// Main item struct
 /// TODO: Handle any content type with len
@@ -62,7 +63,18 @@ pub const Item = struct {
     allocatedContent: bool,
     pub const ItemSplice = *const fn (self: *Item, idx: usize) anyerror!*Item;
     /// Inits new item with allocator. Caller is responsible for calling Item.deinit().
-    pub fn init(id: ItemId, originLeft: ItemId, originRight: ?ItemId, left: ?*Item, right: ?*Item, content: []const u8, isDeleted: bool, allocator: std.mem.Allocator, splice: ItemSplice, allocatedContent: bool) !*Item {
+    pub fn init(
+        id: ItemId,
+        originLeft: ItemId,
+        originRight: ?ItemId,
+        left: ?*Item,
+        right: ?*Item,
+        content: []const u8,
+        isDeleted: bool,
+        allocator: std.mem.Allocator,
+        splice: ItemSplice,
+        allocatedContent: bool,
+    ) !*Item {
         const new_item = try allocator.create(Item);
         new_item.* = .{ .id = id, .originLeft = originLeft, .originRight = originRight, .left = left, .right = right, .content = content, .isDeleted = isDeleted, .allocator = allocator, .splice = splice, .allocatedContent = allocatedContent };
         return new_item;
@@ -119,14 +131,21 @@ pub const Item = struct {
         splice: []const u8,
     };
 
-    fn get_splice_string(self: Item) []const u8 {
+    fn getSplice(splice: []const u8) ItemSplice {
+        if (std.mem.eql(u8, splice, "string")) {
+            return &spliceStringItem;
+        }
+        return &spliceStringItem;
+    }
+
+    fn getSpliceString(self: Item) []const u8 {
         if (self.splice == &spliceStringItem) {
             return "string";
         }
         return "unknown";
     }
 
-    pub fn to_data(self: *Item) ItemData {
+    pub fn toData(self: *Item) ItemData {
         return ItemData{
             .id = self.id,
             .originLeft = self.originLeft,
@@ -134,18 +153,11 @@ pub const Item = struct {
             .right = if (self.right != null) self.right.?.id else null,
             .content = self.content,
             .isDeleted = self.isDeleted,
-            .splice = self.get_splice_string(),
+            .splice = self.getSpliceString(),
         };
     }
 
-    fn get_splice(splice: []const u8) ItemSplice {
-        if (std.mem.eql(u8, splice, "string")) {
-            return &spliceStringItem;
-        }
-        return &spliceStringItem;
-    }
-
-    pub fn from_data(item_data: ItemData, allocator: std.mem.Allocator) !*Item {
+    pub fn fromData(item_data: ItemData, allocator: std.mem.Allocator) !*Item {
         const content = try allocator.alloc(u8, item_data.content.len);
         @memcpy(content, item_data.content);
         return try Item.init(
@@ -157,13 +169,13 @@ pub const Item = struct {
             content,
             item_data.isDeleted,
             allocator,
-            Item.get_splice(item_data.splice),
+            Item.getSplice(item_data.splice),
             true,
         );
     }
 
     pub fn serialize(self: *Item) ![]const u8 {
-        const item_data = self.to_data();
+        const item_data = self.toData();
         var buf = std.io.Writer.Allocating.init(self.allocator);
         defer buf.deinit();
         const formatter = std.json.fmt(item_data, .{});
@@ -174,16 +186,16 @@ pub const Item = struct {
     pub fn deserialize(value: []const u8, allocator: std.mem.Allocator) !*Item {
         const parsed: std.json.Parsed(ItemData) = try std.json.parseFromSlice(ItemData, allocator, value, .{});
         defer parsed.deinit();
-        return try Item.from_data(parsed.value, allocator);
+        return try Item.fromData(parsed.value, allocator);
     }
 };
 
-pub const ItemContext = struct {
-    pub fn eql(self: ItemContext, a: Item, b: Item) bool {
+pub const ItemHashContext = struct {
+    pub fn eql(self: ItemHashContext, a: Item, b: Item) bool {
         _ = self;
         return a.eql(b);
     }
-    pub fn hash(self: ItemIdContext, a: Item) u64 {
+    pub fn hash(self: ItemIdHashContext, a: Item) u64 {
         _ = self;
         return a.hash();
     }
@@ -198,8 +210,29 @@ pub fn spliceStringItem(self: *Item, idx: usize) !*Item {
         // Deleted, dont care
         return self;
     }
-    const right = try Item.init(ItemId{ .clientId = self.id.clientId, .seqId = self.id.seqId + idx }, self.id, self.originRight, self, self.right, self.content[idx..], false, self.allocator, self.splice, false);
-    self.content = self.content[0..idx];
+    var right_content = self.content[idx..];
+    var left_content = self.content[0..idx];
+    var allocated = false;
+    if (self.allocatedContent) {
+        right_content = try std.fmt.allocPrint(self.allocator, "{s}", .{right_content});
+        left_content = try std.fmt.allocPrint(self.allocator, "{s}", .{left_content});
+        allocated = true;
+        self.allocator.free(self.content);
+    }
+    const right = try Item.init(
+        ItemId{ .clientId = self.id.clientId, .seqId = self.id.seqId + idx },
+        self.id,
+        self.originRight,
+        self,
+        self.right,
+        right_content,
+        false,
+        self.allocator,
+        self.splice,
+        allocated,
+    );
+    self.content = left_content;
+    self.allocatedContent = allocated;
     self.right = right;
     return self;
 }

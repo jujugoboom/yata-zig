@@ -87,7 +87,7 @@ pub const Doc = struct {
         self.allocator.destroy(self);
     }
 
-    fn deinit_no_items(self: *Doc) void {
+    fn deinitNoItems(self: *Doc) void {
         self.allocator.destroy(self);
     }
 
@@ -113,7 +113,7 @@ pub const Doc = struct {
 
     /// Clones self into a new doc. Allocates new doc with existing allocator, caller is responsible for calling Doc.deinit() on returned doc.
     pub fn clone(self: *Doc) !*Doc {
-        var item_map = std.HashMap(*item.Item, *item.Item, item.ItemContext, 80).init(self.allocator);
+        var item_map = std.HashMap(*item.Item, *item.Item, item.ItemHashContext, 80).init(self.allocator);
         defer item_map.deinit();
         item_map.ensureTotalCapacity(self.items);
         var it = self.iter();
@@ -144,119 +144,6 @@ pub const Doc = struct {
             try buf.appendSlice(self.allocator, curr_item.content);
         }
         return buf;
-    }
-
-    const DocData = struct {
-        item_map: std.StringArrayHashMap([]const u8),
-        len: usize,
-        items: u32,
-        allocator: std.mem.Allocator,
-        allocated: bool,
-
-        const InnerData = struct {
-            item_map: std.json.ArrayHashMap([]const u8),
-            len: usize,
-            items: u32,
-        };
-        pub fn from_doc(doc: *Doc, allocator: std.mem.Allocator) !*DocData {
-            const doc_data = try allocator.create(DocData);
-            var item_map = std.StringArrayHashMap([]const u8).init(allocator);
-            var doc_iter = doc.iter();
-            while (doc_iter.next()) |doc_item| {
-                try item_map.put(try doc_item.id.fmt(allocator), try doc_item.serialize());
-            }
-            doc_data.* = .{
-                .allocator = allocator,
-                .item_map = item_map,
-                .items = doc.items,
-                .len = doc.len,
-                .allocated = true,
-            };
-            return doc_data;
-        }
-
-        pub fn to_doc(self: *DocData) !*Doc {
-            var item_data_map = std.HashMap(
-                item.ItemId,
-                item.Item.ItemData,
-                item.ItemIdContext,
-                80,
-            ).init(self.allocator);
-            defer item_data_map.deinit();
-            for (self.item_map.keys()) |id| {
-                const parsed = try std.json.parseFromSlice(item.Item.ItemData, self.allocator, self.item_map.get(id).?, .{});
-                defer parsed.deinit();
-                try item_data_map.put(try item.ItemId.fromString(id), parsed.value);
-            }
-            var item_map = item.ItemIdMap.init(self.allocator);
-            defer item_map.deinit();
-            var item_data_map_iter = item_data_map.keyIterator();
-            while (item_data_map_iter.next()) |id| {
-                const new_item = try item.Item.from_data(item_data_map.get(id.*).?, self.allocator);
-                try item_map.put(id.*, new_item);
-            }
-            var item_map_iter = item_map.keyIterator();
-            while (item_map_iter.next()) |id| {
-                const data = item_data_map.get(id.*).?;
-                if (data.right != null) {
-                    const right = item_map.get(data.right.?).?;
-                    const curr = item_map.get(id.*).?;
-                    curr.right = right;
-                    right.left = curr;
-                }
-            }
-            return Doc.withHead(self.allocator, item_map.get(item.HeadItemId).?);
-        }
-
-        pub fn deinit(self: *DocData) void {
-            if (self.allocated) {
-                for (self.item_map.keys()) |key| {
-                    self.allocator.free(self.item_map.get(key).?);
-                    self.allocator.free(key);
-                }
-            }
-            self.item_map.deinit();
-            self.allocator.destroy(self);
-        }
-
-        pub fn only_data(self: *DocData) InnerData {
-            const item_map = std.json.ArrayHashMap([]const u8){ .map = self.item_map.unmanaged };
-            return .{ .item_map = item_map, .len = self.len, .items = self.items };
-        }
-
-        pub fn from_inner_data(data: InnerData, allocator: std.mem.Allocator) !*DocData {
-            const new_data = try allocator.create(DocData);
-            var item_map = std.StringArrayHashMap([]const u8).init(allocator);
-            for (data.item_map.map.keys()) |key| {
-                try item_map.put(key, data.item_map.map.get(key).?);
-            }
-            new_data.* = .{
-                .allocator = allocator,
-                .item_map = item_map,
-                .len = data.len,
-                .items = data.items,
-                .allocated = false,
-            };
-            return new_data;
-        }
-    };
-
-    pub fn serialize(self: *Doc) ![]const u8 {
-        const doc_data = try DocData.from_doc(self, self.allocator);
-        defer doc_data.deinit();
-        var buf = std.io.Writer.Allocating.init(self.allocator);
-        defer buf.deinit();
-        const formatter = std.json.fmt(doc_data.only_data(), .{});
-        try formatter.format(&buf.writer);
-        return try buf.toOwnedSlice();
-    }
-
-    pub fn deserialize(value: []const u8, allocator: std.mem.Allocator) !*Doc {
-        const parsed = try std.json.parseFromSlice(DocData.InnerData, allocator, value, .{});
-        defer parsed.deinit();
-        const doc_data = try DocData.from_inner_data(parsed.value, allocator);
-        defer doc_data.deinit();
-        return try doc_data.to_doc();
     }
 
     /// Gets item given item id
@@ -293,8 +180,8 @@ pub const Doc = struct {
         return last;
     }
 
-    /// Gets next sequence id in doc for given clientId
-    fn getNextSeqId(self: *Doc, clientId: usize) usize {
+    /// Gets last item in doc for given clientId
+    fn getLastItem(self: *Doc, clientId: usize) ?*item.Item {
         var last_item: ?*item.Item = null;
         var it = self.iter();
         while (it.next()) |curr_item| {
@@ -307,28 +194,35 @@ pub const Doc = struct {
                 }
             }
         }
+        return last_item;
+    }
+
+    /// Gets next sequence id in doc for given clientId
+    fn getNextSeqId(self: *Doc, clientId: usize) usize {
+        const last_item = self.getLastItem(clientId);
         return if (last_item) |found_last_item| found_last_item.id.seqId + found_last_item.content.len else 1;
     }
 
-    /// Gets last item in doc for given clientId
-    fn getLastItem(self: *Doc, clientId: usize) ?*item.Item {
-        var last_item: ?*item.Item = null;
-        var it = self.iter();
-        while (it.next()) |curr_item| {
-            if (last_item == null and curr_item.id.clientId == clientId) {
-                last_item = curr_item;
-            }
-            if (curr_item.id.clientId == clientId and curr_item.id.seqId > last_item.?.id.seqId) {
-                last_item = curr_item;
-            }
-        }
-        return last_item;
+    /// Check if we can two items on insertion
+    fn canCompact(self: *Doc, clientId: usize, seqId: usize, left: *item.Item) bool {
+        _ = self;
+        return !left.isDeleted and left.id.clientId == clientId and left.id.seqId + left.content.len == seqId;
     }
 
     /// Inserts new item at index with clientId, splitting existing items when needed
     pub fn insert(self: *Doc, clientId: usize, index: usize, value: []const u8) !void {
         const seqId = self.getNextSeqId(clientId);
         var pos = try self.findPosition(index);
+        if (self.canCompact(clientId, seqId, pos)) {
+            const curr_content = pos.content;
+            pos.content = try std.fmt.allocPrint(self.allocator, "{s}{s}", .{ curr_content, value });
+            if (pos.allocatedContent) {
+                self.allocator.free(curr_content);
+            }
+            pos.allocatedContent = true;
+            self.len += value.len;
+            return;
+        }
         const origin_right = if (pos.right) |right| right.id else null;
         const new_item = try item.Item.init(item.ItemId{ .clientId = clientId, .seqId = seqId }, pos.id, origin_right, pos, pos.right, value, false, self.allocator, &item.spliceStringItem, false);
         if (new_item.right) |right_item| right_item.left = new_item;
@@ -536,7 +430,7 @@ pub const Doc = struct {
             null_head.deinit();
         }
         var delta_doc = try Doc.withHead(self.allocator, head);
-        defer delta_doc.deinit_no_items();
+        defer delta_doc.deinitNoItems();
         try self.merge(delta_doc);
         var it = self.iter();
         while (it.next()) |curr_item| {
@@ -544,6 +438,119 @@ pub const Doc = struct {
                 curr_item.content = "";
             }
         }
+    }
+
+    const DocData = struct {
+        item_map: std.StringArrayHashMap([]const u8),
+        len: usize,
+        items: u32,
+        allocator: std.mem.Allocator,
+        allocated: bool,
+
+        const InnerData = struct {
+            item_map: std.json.ArrayHashMap([]const u8),
+            len: usize,
+            items: u32,
+        };
+        pub fn fromDoc(doc: *Doc, allocator: std.mem.Allocator) !*DocData {
+            const doc_data = try allocator.create(DocData);
+            var item_map = std.StringArrayHashMap([]const u8).init(allocator);
+            var doc_iter = doc.iter();
+            while (doc_iter.next()) |doc_item| {
+                try item_map.put(try doc_item.id.fmt(allocator), try doc_item.serialize());
+            }
+            doc_data.* = .{
+                .allocator = allocator,
+                .item_map = item_map,
+                .items = doc.items,
+                .len = doc.len,
+                .allocated = true,
+            };
+            return doc_data;
+        }
+
+        pub fn toDoc(self: *DocData) !*Doc {
+            var item_data_map = std.HashMap(
+                item.ItemId,
+                item.Item.ItemData,
+                item.ItemIdHashContext,
+                80,
+            ).init(self.allocator);
+            defer item_data_map.deinit();
+            for (self.item_map.keys()) |id| {
+                const parsed = try std.json.parseFromSlice(item.Item.ItemData, self.allocator, self.item_map.get(id).?, .{});
+                defer parsed.deinit();
+                try item_data_map.put(try item.ItemId.fromString(id), parsed.value);
+            }
+            var item_map = item.ItemIdMap.init(self.allocator);
+            defer item_map.deinit();
+            var item_data_map_iter = item_data_map.keyIterator();
+            while (item_data_map_iter.next()) |id| {
+                const new_item = try item.Item.fromData(item_data_map.get(id.*).?, self.allocator);
+                try item_map.put(id.*, new_item);
+            }
+            var item_map_iter = item_map.keyIterator();
+            while (item_map_iter.next()) |id| {
+                const data = item_data_map.get(id.*).?;
+                if (data.right != null) {
+                    const right = item_map.get(data.right.?).?;
+                    const curr = item_map.get(id.*).?;
+                    curr.right = right;
+                    right.left = curr;
+                }
+            }
+            return Doc.withHead(self.allocator, item_map.get(item.HeadItemId).?);
+        }
+
+        pub fn deinit(self: *DocData) void {
+            if (self.allocated) {
+                for (self.item_map.keys()) |key| {
+                    self.allocator.free(self.item_map.get(key).?);
+                    self.allocator.free(key);
+                }
+            }
+            self.item_map.deinit();
+            self.allocator.destroy(self);
+        }
+
+        pub fn onlyData(self: *DocData) InnerData {
+            const item_map = std.json.ArrayHashMap([]const u8){ .map = self.item_map.unmanaged };
+            return .{ .item_map = item_map, .len = self.len, .items = self.items };
+        }
+
+        pub fn fromInnerData(data: InnerData, allocator: std.mem.Allocator) !*DocData {
+            const new_data = try allocator.create(DocData);
+            var item_map = std.StringArrayHashMap([]const u8).init(allocator);
+            for (data.item_map.map.keys()) |key| {
+                try item_map.put(key, data.item_map.map.get(key).?);
+            }
+            new_data.* = .{
+                .allocator = allocator,
+                .item_map = item_map,
+                .len = data.len,
+                .items = data.items,
+                .allocated = false,
+            };
+            return new_data;
+        }
+    };
+
+    pub fn serialize(self: *Doc) ![]const u8 {
+        const doc_data = try DocData.fromDoc(self, self.allocator);
+        defer doc_data.deinit();
+        var buf = std.io.Writer.Allocating.init(self.allocator);
+        defer buf.deinit();
+        const formatter = std.json.fmt(doc_data.onlyData(), .{});
+        try formatter.format(&buf.writer);
+        return try buf.toOwnedSlice();
+    }
+
+    pub fn deserialize(value: []const u8, allocator: std.mem.Allocator) !*Doc {
+        const parsed = try std.json.parseFromSlice(DocData.InnerData, allocator, value, .{});
+        defer parsed.deinit();
+        const doc_data = try DocData.fromInnerData(parsed.value, allocator);
+        defer doc_data.deinit();
+        return try doc_data.toDoc();
     }
 };
 
@@ -690,4 +697,44 @@ test "serialize document" {
     defer deserialized2.deinit();
     try expect(deserialized2.eql(doc2));
     try expect(!deserialized2.eql(doc));
+}
+
+test "compaction" {
+    const doc = try Doc.init(testing.allocator);
+    defer doc.deinit();
+    const str = try generateString(2000, testing.allocator);
+    defer testing.allocator.free(str);
+
+    var i: usize = 0;
+    while (i < str.len) : (i += 1) {
+        try doc.insert(1, i, str[i .. i + 1]);
+    }
+
+    var res1 = try doc.toString();
+    defer res1.deinit(testing.allocator);
+    try expect(std.mem.eql(u8, str, res1.items));
+    try expect(doc.items == 2);
+
+    const str2 = try generateString(2000, testing.allocator);
+
+    var prng = std.Random.DefaultPrng.init(0);
+    const rng = prng.random();
+
+    const doc2 = try Doc.init(testing.allocator);
+    defer doc2.deinit();
+    defer testing.allocator.free(str2);
+    var expected_str = try std.ArrayList(u8).initCapacity(testing.allocator, str2.len);
+    defer expected_str.deinit(testing.allocator);
+    i = 0;
+    while (i < str2.len) : (i += 1) {
+        const idx = rng.intRangeAtMost(usize, 0, i);
+        try doc2.insert(1, idx, str2[i .. i + 1]);
+        try expected_str.insert(testing.allocator, idx, str2[i .. i + 1][0]);
+    }
+
+    // should hopefully not run into the situation where we always insert at the end of the document
+    try expect(doc2.items > 2);
+    var res2 = try doc2.toString();
+    defer res2.deinit(testing.allocator);
+    try expect(std.mem.eql(u8, res2.items, expected_str.items));
 }
