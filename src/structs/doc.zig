@@ -24,6 +24,61 @@ pub const DocDelta = struct {
         }
         self.allocator.destroy(self);
     }
+
+    const DocDeltaData = struct {
+        doc: []const u8,
+        tombstones: []std.json.Value,
+    };
+
+    pub fn serialize(self: *DocDelta) ![]const u8 {
+        var doc_str: []const u8 = try self.allocator.dupe(u8, "{}");
+        defer self.allocator.free(doc_str);
+        if (self.delta != null) {
+            const doc = try Doc.withHead(self.allocator, self.delta.?);
+            defer doc.deinitNoItems();
+            // Free dummy allocated string
+            self.allocator.free(doc_str);
+            doc_str = try doc.serialize();
+        }
+        var buf = std.io.Writer.Allocating.init(self.allocator);
+        defer buf.deinit();
+        var tombstone_arr = std.json.Array.init(self.allocator);
+        var tombstone_it = self.tombstones.keyIterator();
+        while (tombstone_it.next()) |item_id| {
+            try tombstone_arr.append(.{
+                .string = try item_id.fmt(self.allocator),
+            });
+        }
+        try std.json.fmt(DocDeltaData{
+            .doc = doc_str,
+            .tombstones = tombstone_arr.items,
+        }, .{}).format(
+            &buf.writer,
+        );
+        return buf.toOwnedSlice();
+    }
+
+    pub fn deserialize(value: []const u8, allocator: std.mem.Allocator) !*DocDelta {
+        const parsed = try std.json.parseFromSlice(
+            DocDeltaData,
+            allocator,
+            value,
+            .{},
+        );
+        defer parsed.deinit();
+        const delta_data: DocDeltaData = parsed.value;
+        var head: ?*item.Item = null;
+        if (!std.mem.eql(u8, delta_data.doc, "{}")) {
+            const doc = try Doc.deserialize(delta_data.doc, allocator);
+            defer doc.deinitNoItems();
+            head = doc.head;
+        }
+        var tombstone_set = item.ItemIdSet.init(allocator);
+        for (delta_data.tombstones) |item_id_str| {
+            try tombstone_set.put(try item.ItemId.fromString(item_id_str.string), {});
+        }
+        return DocDelta.init(head, tombstone_set, allocator);
+    }
 };
 
 /// Iterator through Doc
@@ -35,6 +90,8 @@ const DocIterator = struct {
         return ret;
     }
 };
+
+pub const DocVersion = std.AutoHashMap(usize, usize);
 
 /// Main doc struct. Contains all logic for YATA CRDT and handles all item creation
 pub const Doc = struct {
@@ -380,7 +437,7 @@ pub const Doc = struct {
     }
 
     /// Gets current version map (clientId => max(seqId)) for doc
-    fn version(self: *Doc) !std.AutoHashMap(usize, usize) {
+    fn version(self: *Doc) !DocVersion {
         var version_map = std.AutoHashMap(usize, usize).init(self.allocator);
         var it = self.iter();
         while (it.next()) |curr_item| {
@@ -392,16 +449,14 @@ pub const Doc = struct {
         return version_map;
     }
 
-    /// Generates DocDelta between this doc and provided other doc. Caller responsible for calling DocDelta.deinit()
-    pub fn delta(self: *Doc, doc: *Doc) !*DocDelta {
+    /// Generates DocDelta for this document based off proivded DocVersion
+    pub fn getUpdate(self: *Doc, other_version: DocVersion) !*DocDelta {
         var delta_head: ?*item.Item = null;
         var curr_delta: ?*item.Item = null;
         var tombstones = item.ItemIdSet.init(self.allocator);
-        var curr_version = try self.version();
-        defer curr_version.deinit();
-        var it = doc.iter();
+        var it = self.iter();
         while (it.next()) |curr_item| {
-            if (!curr_version.contains(curr_item.id.clientId) or curr_item.id.seqId > curr_version.get(curr_item.id.clientId) orelse 0) {
+            if (!other_version.contains(curr_item.id.clientId) or curr_item.id.seqId > other_version.get(curr_item.id.clientId) orelse 0) {
                 if (delta_head == null) {
                     delta_head = try curr_item.clone();
                     curr_delta = delta_head;
@@ -419,6 +474,13 @@ pub const Doc = struct {
             }
         }
         return DocDelta.init(delta_head, tombstones, self.allocator);
+    }
+
+    /// Generates DocDelta between this doc and provided other doc. Caller responsible for calling DocDelta.deinit()
+    pub fn delta(self: *Doc, doc: *Doc) !*DocDelta {
+        var curr_version = try self.version();
+        defer curr_version.deinit();
+        return doc.getUpdate(curr_version);
     }
 
     /// Merges a DocDelta into this doc, copying all items
@@ -442,6 +504,7 @@ pub const Doc = struct {
 
     const DocData = struct {
         item_map: std.StringArrayHashMap([]const u8),
+        head: ?[]const u8,
         len: usize,
         items: u32,
         allocator: std.mem.Allocator,
@@ -449,6 +512,7 @@ pub const Doc = struct {
 
         const InnerData = struct {
             item_map: std.json.ArrayHashMap([]const u8),
+            head: ?[]const u8,
             len: usize,
             items: u32,
         };
@@ -462,6 +526,7 @@ pub const Doc = struct {
             doc_data.* = .{
                 .allocator = allocator,
                 .item_map = item_map,
+                .head = try doc.head.id.fmt(allocator),
                 .items = doc.items,
                 .len = doc.len,
                 .allocated = true,
@@ -499,7 +564,8 @@ pub const Doc = struct {
                     right.left = curr;
                 }
             }
-            return Doc.withHead(self.allocator, item_map.get(item.HeadItemId).?);
+            const head_id = if (self.head != null) try item.ItemId.fromString(self.head.?) else item.HeadItemId;
+            return Doc.withHead(self.allocator, item_map.get(head_id).?);
         }
 
         pub fn deinit(self: *DocData) void {
@@ -508,6 +574,7 @@ pub const Doc = struct {
                     self.allocator.free(self.item_map.get(key).?);
                     self.allocator.free(key);
                 }
+                if (self.head != null) self.allocator.free(self.head.?);
             }
             self.item_map.deinit();
             self.allocator.destroy(self);
@@ -515,7 +582,12 @@ pub const Doc = struct {
 
         pub fn onlyData(self: *DocData) InnerData {
             const item_map = std.json.ArrayHashMap([]const u8){ .map = self.item_map.unmanaged };
-            return .{ .item_map = item_map, .len = self.len, .items = self.items };
+            return .{
+                .item_map = item_map,
+                .head = self.head,
+                .len = self.len,
+                .items = self.items,
+            };
         }
 
         pub fn fromInnerData(data: InnerData, allocator: std.mem.Allocator) !*DocData {
@@ -527,6 +599,7 @@ pub const Doc = struct {
             new_data.* = .{
                 .allocator = allocator,
                 .item_map = item_map,
+                .head = data.head,
                 .len = data.len,
                 .items = data.items,
                 .allocated = false,
@@ -546,9 +619,17 @@ pub const Doc = struct {
     }
 
     pub fn deserialize(value: []const u8, allocator: std.mem.Allocator) !*Doc {
-        const parsed = try std.json.parseFromSlice(DocData.InnerData, allocator, value, .{});
+        const parsed = try std.json.parseFromSlice(
+            DocData.InnerData,
+            allocator,
+            value,
+            .{},
+        );
         defer parsed.deinit();
-        const doc_data = try DocData.fromInnerData(parsed.value, allocator);
+        const doc_data = try DocData.fromInnerData(
+            parsed.value,
+            allocator,
+        );
         defer doc_data.deinit();
         return try doc_data.toDoc();
     }
@@ -628,6 +709,40 @@ test "delta merge docs test" {
     try expect(std.mem.eql(u8, doc1_res.items, doc2_res.items));
 }
 
+test "delta serialize" {
+    var doc1 = try Doc.init(testing.allocator);
+    defer doc1.deinit();
+    try doc1.insert(1, 0, "Hello");
+
+    var doc2 = try Doc.init(testing.allocator);
+    defer doc2.deinit();
+    try doc2.insert(1, 0, "Hello");
+    try doc2.insert(2, 1, "p");
+    try doc1.insert(1, 1, "r");
+    var doc1_delta = try doc1.delta(doc2);
+    defer doc1_delta.deinit();
+    const doc1_serialized = try doc1_delta.serialize();
+    defer testing.allocator.free(doc1_serialized);
+    const doc1_deserialized = try DocDelta.deserialize(doc1_serialized, testing.allocator);
+    defer doc1_deserialized.deinit();
+    var doc2_delta = try doc2.delta(doc1);
+    defer doc2_delta.deinit();
+    const doc2_serialized = try doc2_delta.serialize();
+    defer testing.allocator.free(doc2_serialized);
+    const doc2_deserialized = try DocDelta.deserialize(doc2_serialized, testing.allocator);
+    defer doc2_deserialized.deinit();
+    try expect(doc2_deserialized.delta.?.right == null);
+    try expect(doc1_deserialized.delta.?.right == null);
+    try doc1.mergeDelta(doc1_deserialized);
+    try doc2.mergeDelta(doc2_deserialized);
+    var doc1_res = try doc1.toString();
+    defer doc1_res.deinit(testing.allocator);
+    var doc2_res = try doc2.toString();
+    defer doc2_res.deinit(testing.allocator);
+    try expect(std.mem.eql(u8, doc1_res.items, "Hrpello"));
+    try expect(std.mem.eql(u8, doc1_res.items, doc2_res.items));
+}
+
 fn generateString(n: usize, allocator: std.mem.Allocator) ![]const u8 {
     var prng = std.Random.DefaultPrng.init(0);
     const rng = prng.random();
@@ -677,7 +792,7 @@ test "serialize document" {
     try doc.insert(1, 0, "Hello World");
     const serialized = try doc.serialize();
     defer testing.allocator.free(serialized);
-
+    std.debug.print("{s}", .{serialized});
     const deserialized = try Doc.deserialize(serialized, testing.allocator);
     defer deserialized.deinit();
     try expect(deserialized.eql(doc));
