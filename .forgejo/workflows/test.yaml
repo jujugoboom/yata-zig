@@ -12,6 +12,8 @@ jobs:
       - name: Install dependencies
         run: |
           apt-get update && apt-get install -y snapd
+          snap version
+          systemctl status snapd 
           snap install zig --classic --edge
           zig version
       - name: Run tests
