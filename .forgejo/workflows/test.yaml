@@ -12,7 +12,7 @@ jobs:
         run: |
           wget -q https://ziglang.org/download/0.15.1/zig-x86_64-linux-0.15.1.tar.xz
           tar xf zig-x86_64-linux-0.15.1.tar.xz
-          cp zig-x86_64-linux-0.15.1/zig /usr/bin/
+          ln zig-x86_64-linux-0.15.1/zig /usr/bin/
       - uses: actions/checkout@v4
       - name: Run tests
         run: zig build test
