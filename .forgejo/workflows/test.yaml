@@ -5,7 +5,7 @@ on:
       - "*"
 
 jobs:
-  deploy:
+  test:
     runs-on: docker
     steps:
       - uses: actions/checkout@v4
