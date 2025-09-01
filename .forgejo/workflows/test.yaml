@@ -9,6 +9,5 @@ jobs:
     runs-on: docker
     steps:
       - uses: actions/checkout@v4
-      - name: Run tests
-        uses: ./ci
+      - uses: ./ci
         run: zig build test
