@@ -1,5 +1,0 @@
-name: "Zig docker container"
-description: "Docker image with zig installed"
-runs:
-  using: "docker"
-  image: "Dockerfile" # Points to the Dockerfile in the same directory
