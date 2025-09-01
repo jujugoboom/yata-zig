@@ -8,3 +8,4 @@ Somewhat dumping ground for playing with zig for now. Will maybe cleanup in the 
 
 The protocol utilized here is not compatible wtih other y-protocol implementations, it may be one day, but the underlying structs can be utilized for string CRDTs.
 
+Contributions are welcome, work happens on my [personal git](git.justincovell.com/jujugoboom/yata-zig)
