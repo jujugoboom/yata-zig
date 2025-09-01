@@ -1,0 +1,19 @@
+name: Test commit
+on:
+  push:
+    branches:
+      - "*"
+
+jobs:
+  deploy:
+    runs-on: docker
+    container:
+      image: ubuntu:latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install dependencies
+        run: |
+          sudo snap install zig --classic --edge
+          zig version
+      - name: Run tests
+        run: zig build test
