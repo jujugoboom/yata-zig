@@ -7,17 +7,12 @@ on:
 jobs:
   deploy:
     runs-on: docker
-    container:
-      image: ghcr.io/catthehacker/ubuntu:act-latest
     steps:
       - uses: actions/checkout@v4
-      - name: install snap
+      - name: install zig
         run: |
-          apt-get update && apt-get install -y snapd
-          snap install core
-      - name: Install dependencies
-        run: |
-          snap install zig --classic --edge
-          zig version
+          wget -q https://ziglang.org/download/0.15.1/zig-x86_64-linux-0.15.1.tar.xz
+          tar -zxf zig-x86_64-linux-0.15.1.tar.xz
+          cp zig-x86_64-linux-0.15.1/zig /usr/bin/
       - name: Run tests
         run: zig build test
