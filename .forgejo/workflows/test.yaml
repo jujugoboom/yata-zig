@@ -8,11 +8,12 @@ jobs:
   deploy:
     runs-on: docker
     steps:
-      - name: install zig
-        run: |
-          wget -q https://ziglang.org/download/0.15.1/zig-x86_64-linux-0.15.1.tar.xz
-          tar xf zig-x86_64-linux-0.15.1.tar.xz
-          echo "$(pwd)/zig-x86_64-linux-0.15.1" >> $GITHUB_PATH
+      - uses: https://github.com/mlugg/setup-zig@v2
+      # - name: install zig
+      #   run: |
+      #     wget -q https://ziglang.org/download/0.15.1/zig-x86_64-linux-0.15.1.tar.xz
+      #     tar xf zig-x86_64-linux-0.15.1.tar.xz
+      #     echo "$(pwd)/zig-x86_64-linux-0.15.1" >> $GITHUB_PATH
       - uses: actions/checkout@v4
       - name: Run tests
         run: zig build test
