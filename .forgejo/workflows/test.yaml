@@ -11,6 +11,10 @@ jobs:
       image: ghcr.io/catthehacker/ubuntu:act-latest
     steps:
       - uses: actions/checkout@v4
+      - name: install snap
+        run: |
+          apt-get update && apt-get install -y snapd
+          snap install core
       - name: Install dependencies
         run: |
           snap install zig --classic --edge
