@@ -7,8 +7,13 @@ on:
 jobs:
   deploy:
     runs-on: docker
+    container:
+      image: ghcr.io/catthehacker/ubuntu:act-latest
     steps:
       - uses: actions/checkout@v4
-      - name: test
-        uses: ../../ci
+      - name: Install dependencies
+        run: |
+          snap install zig --classic --edge
+          zig version
+      - name: Run tests
         run: zig build test
