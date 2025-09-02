@@ -5,6 +5,7 @@ const expect = testing.expect;
 
 /// Possible merge errors
 const MergeError = error{ MissingOperation, MissingParent };
+const ParseError = error{ InvalidValue, MissingField };
 
 /// Struct to hold delta between two docs. Generated through Doc.delta()
 pub const DocDelta = struct {

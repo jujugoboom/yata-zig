@@ -56,7 +56,7 @@ pub const Item = struct {
     originRight: ?ItemId,
     left: ?*Item,
     right: ?*Item,
-    content: []const u8,
+
     isDeleted: bool,
     allocator: std.mem.Allocator,
     splice: *const fn (self: *Item, idx: usize) anyerror!*Item,
@@ -187,6 +187,38 @@ pub const Item = struct {
         const parsed: std.json.Parsed(ItemData) = try std.json.parseFromSlice(ItemData, allocator, value, .{});
         defer parsed.deinit();
         return try Item.fromData(parsed.value, allocator);
+    }
+
+    pub fn jsonStringify(self: *Item, jws: anytype) !void {
+        try jws.beginObject();
+        try jws.objectField("id");
+        try jws.write(self.id);
+        try jws.objectField("originLeft");
+        try jws.write(self.originLeft);
+        try jws.objectField("originRight");
+        try jws.write(self.originRight);
+        try jws.objectField("right");
+        try jws.write(self.right);
+        try jws.objectField("isDeleted");
+        try jws.write(self.isDeleted);
+        try jws.objectField("splice");
+        try jws.write(self.getSpliceString());
+        try jws.endObject();
+    }
+
+    pub fn jsonParse(allocator: std.mem.Allocator, source: anytype, options: std.json.ParseOptions) !*Item {
+        const value = try std.json.Value.jsonParse(allocator, source, options);
+        return Item.jsonParseFromValue(allocator, value, options);
+    }
+
+    pub fn jsonParseFromValue(allocator: std.mem.Allocator, source: std.json.Value, options: std.json.ParseOptions) !*Item {
+        const obj_map = switch (source) {
+            .object => |map| map,
+            _ => return error.InvalidValue,
+        };
+        if (!obj_map.contains("id") or !obj_map.contains("originLeft") or !obj_map.contains("originRight") or !obj_map.contains("isDeleted") or !obj_map.contains("splice")) {
+            return error.MissingField;
+        }
     }
 };
 

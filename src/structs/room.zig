@@ -1,6 +1,6 @@
 const std = @import("std");
 const ws = @import("websocket");
-const Doc = @import("doc.zig");
+const Doc = @import("doc.zig").Doc;
 
 pub const Room = @This();
 name: []u8,
